@@ -5,7 +5,7 @@ import type React from "react"
 import { useState } from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History } from "lucide-react"
+import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText } from "lucide-react"
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -19,6 +19,7 @@ export function Sidebar() {
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
     { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
     { icon: DollarSign, href: "/billing", label: "Billing", active: pathname === "/billing" },
+    { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
   ]
 
   const handleSidebarClick = (e: React.MouseEvent) => {

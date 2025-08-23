@@ -283,7 +283,7 @@ export default function Dashboard() {
     <div className="p-6 ml-16">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-semibold text-black">Dashboard</h1>
+        <h1 className="text-2xl text-black text-justify font-black">Dashboard</h1>
         <div className="flex items-center gap-4">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

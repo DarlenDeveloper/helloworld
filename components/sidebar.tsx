@@ -31,19 +31,13 @@ export function Sidebar() {
 
   return (
     <div
-      className={`fixed inset-y-0 left-0 z-50 flex h-full flex-col bg-background p-3 shadow-md transition-all ${
+      className={`fixed inset-y-0 left-0 z-50 flex h-full flex-col bg-background p-3 shadow-md transition-all my-1 gap-0.5 ${
         isExpanded ? "w-64" : "w-16"
       }`}
       onClick={handleSidebarClick}
     >
       <div className="flex flex-col space-y-6">
-        <div className="flex h-16 items-center justify-center">
-          <img
-            src="/placeholder-logo.svg"
-            alt="Logo"
-            className={`h-8 transition-all ${isExpanded ? "w-auto" : "w-8"}`}
-          />
-        </div>
+        
         <nav className="flex flex-col space-y-2">
           {menuItems.map((item) => (
             <Link

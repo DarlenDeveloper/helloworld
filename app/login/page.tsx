@@ -1,26 +1,46 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
+import { useRouter } from "next/navigation"
+import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Eye, EyeOff, Bot, Building2 } from "lucide-react"
+import { Eye, EyeOff, Building2 } from "lucide-react"
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [formData, setFormData] = useState({
     email: "",
-    username: "",
     password: "",
   })
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const router = useRouter()
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Handle login logic here
-    console.log("Login attempt:", formData)
+    const supabase = createClient()
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || `${window.location.origin}/dashboard`,
+        },
+      })
+      if (error) throw error
+      router.push("/dashboard")
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "An error occurred")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleInputChange = (field: string, value: string) => {
@@ -32,10 +52,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo and Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-teal-500 rounded-2xl mb-4">
-            <Bot className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-black mb-2">AI Agent Dashboard</h1>
+          <h1 className="text-2xl font-bold text-black mb-2">AIRIES AI CRM COMPANION</h1>
           <p className="text-gray-600">Sign in to manage your customer service operations</p>
         </div>
 
@@ -67,22 +84,6 @@ export default function LoginPage() {
                 <p className="text-xs text-gray-500">This identifies your company in our system</p>
               </div>
 
-              {/* Username Field */}
-              <div className="space-y-2">
-                <Label htmlFor="username" className="text-sm font-medium text-black">
-                  Username
-                </Label>
-                <Input
-                  id="username"
-                  type="text"
-                  placeholder="john.doe"
-                  value={formData.username}
-                  onChange={(e) => handleInputChange("username", e.target.value)}
-                  className="border-gray-300 focus:border-teal-500 focus:ring-teal-500"
-                  required
-                />
-              </div>
-
               {/* Password Field */}
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-sm font-medium text-black">
@@ -108,6 +109,8 @@ export default function LoginPage() {
                 </div>
               </div>
 
+              {error && <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">{error}</div>}
+
               {/* Remember Me and Forgot Password */}
               <div className="flex items-center justify-between text-sm">
                 <label className="flex items-center space-x-2 cursor-pointer">
@@ -120,8 +123,12 @@ export default function LoginPage() {
               </div>
 
               {/* Login Button */}
-              <Button type="submit" className="w-full bg-teal-500 hover:bg-teal-600 text-white font-medium py-2.5">
-                Sign In
+              <Button
+                type="submit"
+                className="w-full bg-teal-500 hover:bg-teal-600 text-white font-medium py-2.5"
+                disabled={isLoading}
+              >
+                {isLoading ? "Signing In..." : "Sign In"}
               </Button>
             </form>
 
@@ -131,13 +138,19 @@ export default function LoginPage() {
                 Need access to the dashboard?{" "}
                 <button className="text-teal-500 hover:text-teal-600 font-medium">Contact your administrator</button>
               </p>
+              <p className="text-center text-sm text-gray-600 mt-2">
+                Don't have an account?{" "}
+                <a href="/sign-up" className="text-teal-500 hover:text-teal-600 font-medium">
+                  Create one here
+                </a>
+              </p>
             </div>
           </CardContent>
         </Card>
 
         {/* Footer */}
         <div className="mt-8 text-center text-xs text-gray-500">
-          <p>© 2024 AI Agent Dashboard. All rights reserved.</p>
+          <p>© 2024 AIRIES AI CRM COMPANION. All rights reserved.</p>
           <p className="mt-1">Secure customer service management platform</p>
         </div>
       </div>

@@ -3,7 +3,7 @@ import type { Metadata } from "next"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import "./globals.css"
-import { Sidebar } from "@/components/sidebar"
+import { ClientSidebar } from "@/components/client-sidebar"
 
 export const metadata: Metadata = {
   title: "AI Agent Dashboard",
@@ -28,11 +28,22 @@ html {
         `}</style>
       </head>
       <body>
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <main className="flex-1 transition-all duration-300">{children}</main>
-        </div>
+        <ConditionalLayout>{children}</ConditionalLayout>
       </body>
     </html>
   )
+}
+
+function ConditionalLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen">
+      <ConditionalSidebar />
+      <main className="flex-1 transition-all duration-300">{children}</main>
+    </div>
+  )
+}
+
+function ConditionalSidebar() {
+  // This will be handled client-side to check the current path
+  return <ClientSidebar />
 }

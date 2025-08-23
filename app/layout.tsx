@@ -34,16 +34,15 @@ html {
   )
 }
 
+// Uses React Server Components, so we can't directly access pathname here
+// But we can check for specific pages based on the children content
 function ConditionalLayout({ children }: { children: React.ReactNode }) {
+  // We pass the children through regardless - the ClientSidebar component
+  // will handle showing/hiding itself based on the current path
   return (
-    <div className="flex min-h-screen">
-      <ConditionalSidebar />
-      <main className="flex-1 transition-all duration-300">{children}</main>
-    </div>
+    <>
+      <ClientSidebar />
+      <main className="flex-1">{children}</main>
+    </>
   )
-}
-
-function ConditionalSidebar() {
-  // This will be handled client-side to check the current path
-  return <ClientSidebar />
 }

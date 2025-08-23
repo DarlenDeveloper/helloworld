@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
-import { Filter, User, LogOut, Plus, Eye } from "lucide-react"
+import { Filter, LogOut, Plus, Eye, UserIcon } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -13,13 +13,98 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AgentPerformanceChart } from "@/components/agent-performance-chart"
+import type { User } from '@supabase/supabase-js'
+import type { RealtimeChannel } from '@supabase/supabase-js'
+
+// Type definitions for our data structures
+interface Call {
+  id: string
+  user_id: string
+  customer_name: string
+  customer_phone: string
+  call_type: 'inbound' | 'outbound'
+  status: 'completed' | 'missed' | 'in_progress'
+  duration?: number
+  notes?: string
+  created_at: string
+  updated_at: string
+}
+
+interface Campaign {
+  id: string
+  user_id: string
+  name: string
+  description?: string
+  status: string
+  target_contacts?: number
+  completed_calls?: number
+  success_rate?: number
+  created_at: string
+  updated_at: string
+}
+
+interface CallHistory {
+  id: string
+  user_id: string
+  campaign_id?: string
+  contact_id?: string
+  phone_number: string
+  status: string
+  duration?: number
+  cost?: number
+  notes?: string
+  ai_summary?: string
+  sentiment?: string
+  call_date: string
+  created_at: string
+}
+
+interface CallStats {
+  inbound: {
+    resolved: number
+    notResolved: number
+    forwarded: number
+  }
+  outbound: {
+    followUp: number
+    notInterested: number
+    notAnswered: number
+  }
+}
+
+interface CallMetrics {
+  totalMinutes: number
+  remainingMinutes: number
+  percentRemaining: number
+  avgDuration: number
+  avgChangePercent: number
+}
+
+interface FormattedCall {
+  status: string
+  contact: string
+  dateTime: string
+  statusColor: string
+  summary: string
+}
 
 export default function Dashboard() {
-  const [callType, setCallType] = useState("inbound")
-  const [selectedCall, setSelectedCall] = useState(null)
-  const [user, setUser] = useState(null)
-  const [calls, setCalls] = useState([])
-  const [campaigns, setCampaigns] = useState([])
+  const [callType, setCallType] = useState<'inbound' | 'outbound'>("inbound")
+  const [selectedCall, setSelectedCall] = useState<FormattedCall | null>(null)
+  const [user, setUser] = useState<User | null>(null)
+  const [calls, setCalls] = useState<Call[]>([])
+  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [callStats, setCallStats] = useState<CallStats>({
+    inbound: { resolved: 0, notResolved: 0, forwarded: 0 },
+    outbound: { followUp: 0, notInterested: 0, notAnswered: 0 }
+  })
+  const [callMetrics, setCallMetrics] = useState<CallMetrics>({
+    totalMinutes: 0,
+    remainingMinutes: 0,
+    percentRemaining: 0,
+    avgDuration: 0,
+    avgChangePercent: 0
+  })
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const supabase = createClient()
@@ -43,7 +128,7 @@ export default function Dashboard() {
 
   const fetchData = async (userId: string) => {
     try {
-      // Fetch calls
+      // Fetch calls with real-time subscription
       const { data: callsData, error: callsError } = await supabase
         .from("calls")
         .select("*")
@@ -54,8 +139,21 @@ export default function Dashboard() {
       if (callsError) {
         console.error("Error fetching calls:", callsError)
       } else {
-        setCalls(callsData || [])
+        setCalls(callsData as Call[] || [])
+        calculateCallStats(callsData as Call[] || [])
       }
+
+      // Set up real-time subscription for calls
+      const callsSubscription: RealtimeChannel = supabase
+        .channel('calls-changes')
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'calls', filter: `user_id=eq.${userId}` },
+          (payload) => {
+            console.log('Calls change received!', payload)
+            fetchData(userId)
+          }
+        )
+        .subscribe()
 
       // Fetch campaigns
       const { data: campaignsData, error: campaignsError } = await supabase
@@ -67,7 +165,23 @@ export default function Dashboard() {
       if (campaignsError) {
         console.error("Error fetching campaigns:", campaignsError)
       } else {
-        setCampaigns(campaignsData || [])
+        setCampaigns(campaignsData as Campaign[] || [])
+      }
+      
+      // Fetch call metrics
+      const { data: callHistoryData, error: callHistoryError } = await supabase
+        .from("call_history")
+        .select("*")
+        .eq("user_id", userId)
+        
+      if (callHistoryError) {
+        console.error("Error fetching call history:", callHistoryError)
+      } else {
+        calculateCallMetrics(callHistoryData as CallHistory[] || [])
+      }
+
+      return () => {
+        supabase.removeChannel(callsSubscription)
       }
     } catch (error) {
       console.error("Error fetching data:", error)
@@ -79,6 +193,55 @@ export default function Dashboard() {
     router.push("/login")
   }
 
+  // Calculate call statistics from calls data
+  const calculateCallStats = (callsData: Call[]) => {
+    // Count calls by type and status
+    const inboundCalls = callsData.filter(call => call.call_type === 'inbound')
+    const outboundCalls = callsData.filter(call => call.call_type === 'outbound')
+    
+    const inboundTotal = inboundCalls.length || 1 // Avoid division by zero
+    const outboundTotal = outboundCalls.length || 1
+    
+    const stats: CallStats = {
+      inbound: {
+        resolved: inboundCalls.filter(call => call.status === 'completed').length,
+        notResolved: inboundCalls.filter(call => call.status === 'missed').length,
+        forwarded: inboundCalls.filter(call => call.status === 'in_progress').length
+      },
+      outbound: {
+        followUp: outboundCalls.filter(call => call.status === 'completed').length,
+        notInterested: outboundCalls.filter(call => call.status === 'in_progress').length,
+        notAnswered: outboundCalls.filter(call => call.status === 'missed').length
+      }
+    }
+    
+    setCallStats(stats)
+  }
+  
+  // Calculate call metrics
+  const calculateCallMetrics = (callHistoryData: CallHistory[]) => {
+    // Example calculation for remaining minutes (assuming a total package of 5000 minutes)
+    const totalPackageMinutes = 5000
+    const usedMinutes = callHistoryData.reduce((total: number, call) => total + (call.duration || 0), 0) / 60
+    const remaining = Math.max(0, totalPackageMinutes - usedMinutes)
+    const percentRemaining = Math.round((remaining / totalPackageMinutes) * 100)
+    
+    // Calculate average call duration
+    const totalCalls = callHistoryData.length || 1
+    const avgDuration = callHistoryData.length ? Math.round((usedMinutes / totalCalls) * 10) / 10 : 0
+    
+    // For demo purposes, simulate change percentage
+    const avgChangePercent = 12 // +12% from last week
+    
+    setCallMetrics({
+      totalMinutes: totalPackageMinutes,
+      remainingMinutes: Math.round(remaining),
+      percentRemaining,
+      avgDuration,
+      avgChangePercent
+    })
+  }
+  
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -90,7 +253,8 @@ export default function Dashboard() {
     )
   }
 
-  const recentCalls = {
+  // Format call data for display
+  const recentCalls: Record<'inbound' | 'outbound', FormattedCall[]> = {
     inbound: calls
       .filter((call) => call.call_type === "inbound")
       .slice(0, 3)
@@ -101,30 +265,7 @@ export default function Dashboard() {
         statusColor:
           call.status === "completed" ? "bg-green-500" : call.status === "missed" ? "bg-red-500" : "bg-yellow-500",
         summary: call.notes || "No summary available",
-      })) || [
-      {
-        status: "Resolved",
-        contact: "+1 (555) 123-4567",
-        dateTime: "Dec 15, 2024 14:32",
-        statusColor: "bg-green-500",
-        summary:
-          "Customer inquiry about refund policy. Agent provided detailed explanation and processed refund request successfully.",
-      },
-      {
-        status: "Not Resolved",
-        contact: "+1 (555) 987-6543",
-        dateTime: "Dec 15, 2024 13:45",
-        statusColor: "bg-red-500",
-        summary: "Technical support issue requiring escalation to engineering team. Follow-up scheduled for tomorrow.",
-      },
-      {
-        status: "Forwarded",
-        contact: "+1 (555) 456-7890",
-        dateTime: "Dec 15, 2024 12:18",
-        statusColor: "bg-yellow-500",
-        summary: "Billing inquiry forwarded to accounting department. Customer will receive callback within 24 hours.",
-      },
-    ],
+      })),
     outbound: calls
       .filter((call) => call.call_type === "outbound")
       .slice(0, 3)
@@ -135,30 +276,7 @@ export default function Dashboard() {
         statusColor:
           call.status === "completed" ? "bg-teal-500" : call.status === "missed" ? "bg-orange-500" : "bg-gray-500",
         summary: call.notes || "No summary available",
-      })) || [
-      {
-        status: "Follow Up",
-        contact: "+1 (555) 234-5678",
-        dateTime: "Dec 15, 2024 15:20",
-        statusColor: "bg-teal-500",
-        summary:
-          "Marketing campaign follow-up. Customer showed interest in premium package. Scheduled demo for next week.",
-      },
-      {
-        status: "Not Interested",
-        contact: "+1 (555) 345-6789",
-        dateTime: "Dec 15, 2024 14:55",
-        statusColor: "bg-gray-500",
-        summary: "Cold outreach for new service offering. Customer politely declined and requested no further contact.",
-      },
-      {
-        status: "Not Answered",
-        contact: "+1 (555) 567-8901",
-        dateTime: "Dec 15, 2024 14:10",
-        statusColor: "bg-orange-500",
-        summary: "Attempted callback for previous inquiry. No answer, voicemail left. Will retry tomorrow.",
-      },
-    ],
+      }))
   }
 
   return (
@@ -178,7 +296,7 @@ export default function Dashboard() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem className="cursor-pointer">
-                <User className="h-4 w-4 mr-2" />
+                <UserIcon className="h-4 w-4 mr-2" />
                 User Settings
               </DropdownMenuItem>
               <DropdownMenuItem className="cursor-pointer text-red-600" onClick={handleLogout}>
@@ -198,16 +316,19 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-2xl font-bold text-black">2,847</span>
+              <span className="text-2xl font-bold text-black">{callMetrics.remainingMinutes.toLocaleString()}</span>
               <Button size="sm" className="bg-teal-500 hover:bg-teal-600 text-white">
                 <Plus className="h-4 w-4 mr-1" />
                 Add
               </Button>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-teal-500 h-2 rounded-full" style={{ width: "68%" }}></div>
+              <div
+                className="bg-teal-500 h-2 rounded-full"
+                style={{ width: `${callMetrics.percentRemaining}%` }}
+              ></div>
             </div>
-            <p className="text-xs text-gray-500 mt-1">68% remaining</p>
+            <p className="text-xs text-gray-500 mt-1">{callMetrics.percentRemaining}% remaining</p>
           </CardContent>
         </Card>
 
@@ -268,21 +389,21 @@ export default function Dashboard() {
                   <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
                   <span>Follow Up</span>
                 </div>
-                <span>45%</span>
+                <span>{Math.round((callStats.outbound.followUp / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                   <span>Not Interested</span>
                 </div>
-                <span>30%</span>
+                <span>{Math.round((callStats.outbound.notInterested / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
                   <span>Not Answered</span>
                 </div>
-                <span>25%</span>
+                <span>{Math.round((callStats.outbound.notAnswered / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
               </div>
             </div>
           </CardContent>
@@ -345,21 +466,21 @@ export default function Dashboard() {
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                   <span>Resolved</span>
                 </div>
-                <span>60%</span>
+                <span>{Math.round((callStats.inbound.resolved / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
                   <span>Not Resolved</span>
                 </div>
-                <span>25%</span>
+                <span>{Math.round((callStats.inbound.notResolved / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                   <span>Forwarded</span>
                 </div>
-                <span>15%</span>
+                <span>{Math.round((callStats.inbound.forwarded / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
               </div>
             </div>
           </CardContent>
@@ -380,9 +501,9 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-center">
-              <span className="text-3xl font-bold text-black">4.2</span>
+              <span className="text-3xl font-bold text-black">{callMetrics.avgDuration}</span>
               <p className="text-sm text-gray-500">minutes</p>
-              <div className="mt-2 text-xs text-teal-600">+12% from last week</div>
+              <div className="mt-2 text-xs text-teal-600">+{callMetrics.avgChangePercent}% from last week</div>
             </div>
           </CardContent>
         </Card>
@@ -492,7 +613,11 @@ export default function Dashboard() {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg font-medium text-black">Recent Calls</CardTitle>
           <div className="flex items-center gap-4">
-            <Tabs value={callType} onValueChange={setCallType} className="w-auto">
+            <Tabs
+              value={callType}
+              onValueChange={(value: string) => setCallType(value as 'inbound' | 'outbound')}
+              className="w-auto"
+            >
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="inbound">Inbound</TabsTrigger>
                 <TabsTrigger value="outbound">Outbound</TabsTrigger>
@@ -515,7 +640,7 @@ export default function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {recentCalls[callType].map((call, index) => (
+              {recentCalls[callType]?.map((call: FormattedCall, index: number) => (
                 <TableRow key={index} className="hover:bg-gray-50">
                   <TableCell>
                     <div className="flex items-center gap-2">

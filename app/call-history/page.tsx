@@ -1,61 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Calendar, Download, Search, Phone, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-
-// Mock data for call history
-const mockCallHistory = [
-  {
-    id: 1,
-    status: "Follow Up",
-    contact: "John Smith",
-    phone: "+256 701 234 567",
-    dateTime: "2024-01-15 14:30",
-    campaign: "Q1 Leads",
-    summary: "Interested in premium package, requested callback next week",
-  },
-  {
-    id: 2,
-    status: "Not Interested",
-    contact: "Sarah Johnson",
-    phone: "+256 702 345 678",
-    dateTime: "2024-01-15 11:45",
-    campaign: "Q3 Instagram Leads",
-    summary: "Not currently looking for services, politely declined",
-  },
-  {
-    id: 3,
-    status: "Follow Up",
-    contact: "Michael Brown",
-    phone: "+256 703 456 789",
-    dateTime: "2024-01-14 16:20",
-    campaign: "Q1 Leads",
-    summary: "Requested more information about pricing and features",
-  },
-  {
-    id: 4,
-    status: "No Response",
-    contact: "Emily Davis",
-    phone: "+256 704 567 890",
-    dateTime: "2024-01-14 09:15",
-    campaign: "Q3 Instagram Leads",
-    summary: "Call went to voicemail, no callback received",
-  },
-  {
-    id: 5,
-    status: "Follow Up",
-    contact: "David Wilson",
-    phone: "+256 705 678 901",
-    dateTime: "2024-01-13 13:10",
-    campaign: "Q1 Leads",
-    summary: "Very interested, wants to schedule demo for next month",
-  },
-]
+import { createClient } from "@/lib/supabase/client"
 
 export default function CallHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
@@ -63,18 +15,68 @@ export default function CallHistoryPage() {
   const [selectedFilter, setSelectedFilter] = useState("all")
   const [dateRange, setDateRange] = useState<string>("Last 7 days")
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
+  const [callHistory, setCallHistory] = useState<any[]>([])
+
+  const supabase = createClient()
+
+  useEffect(() => {
+    // Fetch initial call history data
+    const fetchCallHistory = async () => {
+      const { data, error } = await supabase
+        .from("calls")
+        .select("*")
+        .order("dateTime", { ascending: false })
+
+      if (error) {
+        console.error("Error fetching call history:", error)
+      } else {
+        setCallHistory(data || [])
+      }
+    }
+
+    fetchCallHistory()
+
+    // Set up real-time subscription to calls table
+    const subscription = supabase
+      .channel("public:calls")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "calls" },
+        (payload) => {
+          setCallHistory((current) => {
+            switch (payload.eventType) {
+              case "INSERT":
+                return [payload.new, ...current]
+              case "UPDATE":
+                return current.map((call) =>
+                  call.id === payload.new.id ? payload.new : call
+                )
+              case "DELETE":
+                return current.filter((call) => call.id !== payload.old.id)
+              default:
+                return current
+            }
+          })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(subscription)
+    }
+  }, [supabase])
 
   // Filter data based on current filters
-  const filteredData = mockCallHistory.filter((call) => {
+  const filteredData = callHistory.filter((call) => {
     const matchesSearch =
-      call.contact.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      call.phone.includes(searchTerm) ||
-      call.summary.toLowerCase().includes(searchTerm.toLowerCase())
+      call.contact?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      call.phone?.includes(searchTerm) ||
+      call.summary?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchesCampaign =
-      selectedCampaign === "all" || call.campaign.toLowerCase().includes(selectedCampaign.toLowerCase())
+      selectedCampaign === "all" || call.campaign?.toLowerCase().includes(selectedCampaign.toLowerCase())
 
-    const matchesFilter = selectedFilter === "all" || call.status.toLowerCase().replace(" ", "-") === selectedFilter
+    const matchesFilter = selectedFilter === "all" || call.status?.toLowerCase().replace(" ", "-") === selectedFilter
 
     return matchesSearch && matchesCampaign && matchesFilter
   })

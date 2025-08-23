@@ -30,3 +30,50 @@ export function Sidebar() {
   }
 
   return (
+    <div
+      className={`fixed inset-y-0 left-0 z-50 flex h-full flex-col bg-background p-3 shadow-md transition-all ${
+        isExpanded ? "w-64" : "w-16"
+      }`}
+      onClick={handleSidebarClick}
+    >
+      <div className="flex flex-col space-y-6">
+        <div className="flex h-16 items-center justify-center">
+          <img
+            src="/placeholder-logo.svg"
+            alt="Logo"
+            className={`h-8 transition-all ${isExpanded ? "w-auto" : "w-8"}`}
+          />
+        </div>
+        <nav className="flex flex-col space-y-2">
+          {menuItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center rounded-md p-3 transition-all ${
+                item.active
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              <item.icon className="h-5 w-5" />
+              {isExpanded && <span className="ml-3">{item.label}</span>}
+            </Link>
+          ))}
+        </nav>
+      </div>
+      <div className="mt-auto">
+        <Link
+          href="/settings"
+          className={`flex items-center rounded-md p-3 transition-all ${
+            pathname === "/settings"
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <Settings className="h-5 w-5" />
+          {isExpanded && <span className="ml-3">Settings</span>}
+        </Link>
+      </div>
+    </div>
+  )
+}

@@ -53,9 +53,6 @@ export default function Auth() {
       })
 
       if (error) {
-        if (data?.user?.id) {
-          await logUserLogin(data.user.id, email, "failed")
-        }
         setError(error.message)
       } else if (data.user) {
         await logUserLogin(data.user.id, email, "success")
@@ -330,69 +327,6 @@ export default function Auth() {
         </Card>
       </div>
 
-      {/* Right side - Features Showcase */}
-      <div className="flex-1 bg-gradient-to-br from-emerald-600 to-teal-700 p-8 flex items-center justify-center">
-        <div className="max-w-lg text-white">
-          <h2 className="text-4xl font-bold mb-8">Transform Your Customer Experience</h2>
-
-          <div className="space-y-8">
-            <div className="flex items-start space-x-4">
-              <div className="p-3 bg-white/20 rounded-lg backdrop-blur-sm">
-                <Phone className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Smart Call Management</h3>
-                <p className="text-emerald-100">
-                  AI-powered call routing and intelligent conversation insights to maximize every customer interaction.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-4">
-              <div className="p-3 bg-white/20 rounded-lg backdrop-blur-sm">
-                <Users className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Customer Intelligence</h3>
-                <p className="text-emerald-100">
-                  Deep customer profiles with behavioral analytics and predictive engagement recommendations.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-4">
-              <div className="p-3 bg-white/20 rounded-lg backdrop-blur-sm">
-                <BarChart3 className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Real-time Analytics</h3>
-                <p className="text-emerald-100">
-                  Comprehensive dashboards with actionable insights to drive business growth and performance.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-4">
-              <div className="p-3 bg-white/20 rounded-lg backdrop-blur-sm">
-                <Zap className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Automated Workflows</h3>
-                <p className="text-emerald-100">
-                  Streamline operations with intelligent automation and seamless integrations.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-12 p-6 bg-white/10 rounded-xl backdrop-blur-sm">
-            <p className="text-lg font-medium mb-2">Join thousands of businesses</p>
-            <p className="text-emerald-100">
-              Already using AIRIES AI to revolutionize their customer relationships and drive unprecedented growth.
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

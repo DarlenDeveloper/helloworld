@@ -8,7 +8,7 @@ export function ClientSidebar() {
 
   // Hide sidebar on auth pages
   const isAuthPage =
-    pathname?.startsWith("/login") || pathname?.startsWith("/sign-up") || pathname?.startsWith("/(auth)")
+    pathname?.startsWith("/login") || pathname?.startsWith("/sign-up") || pathname?.startsWith("/auth")
 
   if (isAuthPage) {
     return null

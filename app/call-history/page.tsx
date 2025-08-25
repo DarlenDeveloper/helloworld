@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { createClient } from "@/lib/supabase/client"
+import { AgentPerformanceChart } from "@/components/agent-performance-chart"
 
 export default function CallHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
@@ -16,25 +17,62 @@ export default function CallHistoryPage() {
   const [dateRange, setDateRange] = useState<string>("Last 7 days")
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [callHistory, setCallHistory] = useState<any[]>([])
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   const supabase = createClient()
+  const [userId, setUserId] = useState<string | null>(null)
 
   useEffect(() => {
-    // Fetch initial call history data
-    const fetchCallHistory = async () => {
+    const fetchUserAndCalls = async () => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
+
+      if (userError || !user) {
+        setFetchError("User not authenticated")
+        return
+      }
+
+      setUserId(user.id)
+
       const { data, error } = await supabase
         .from("calls")
         .select("*")
-        .order("dateTime", { ascending: false })
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50)
 
       if (error) {
-        console.error("Error fetching call history:", error)
+        console.error("Error fetching call history:", JSON.stringify(error, null, 2))
+        setFetchError("Failed to fetch call history. Please try again later.")
       } else {
-        setCallHistory(data || [])
+        // Format calls similar to dashboard
+        const formattedCalls = (data || []).map((call: any) => ({
+          id: call.id,
+          status:
+            call.status === "completed"
+              ? "Resolved"
+              : call.status === "missed"
+              ? "Not Resolved"
+              : "In Progress",
+          contact: call.customer_phone || call.phone || "Unknown",
+          dateTime: new Date(call.created_at).toLocaleString(),
+          statusColor:
+            call.status === "completed"
+              ? "bg-green-500"
+              : call.status === "missed"
+              ? "bg-red-500"
+              : "bg-yellow-500",
+          summary: call.notes || "No summary available",
+          duration: call.duration || 0,
+        }))
+        setCallHistory(formattedCalls)
+        setFetchError(null)
       }
     }
 
-    fetchCallHistory()
+    fetchUserAndCalls()
 
     // Set up real-time subscription to calls table
     const subscription = supabase
@@ -83,7 +121,19 @@ export default function CallHistoryPage() {
 
   // Calculate metrics based on filtered data
   const totalCalls = filteredData.length
-  const averageCallDuration = "4:32" // Mock average
+
+  // Convert duration in seconds to mm:ss format
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, "0")}`
+  }
+
+  // Calculate average call duration in mm:ss format
+  const averageDurationSeconds =
+    filteredData.reduce((acc, call) => acc + (call.duration || 0), 0) /
+    (filteredData.length || 1)
+  const averageCallDuration = formatDuration(Math.round(averageDurationSeconds))
 
   const handleDownloadPDF = () => {
     // Mock PDF download functionality
@@ -249,11 +299,11 @@ export default function CallHistoryPage() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div>
                         <div className="text-sm font-medium text-gray-900">{call.contact}</div>
-                        <div className="text-sm text-gray-500">{call.phone}</div>
+                        <div className="text-sm text-gray-500">{call.contact}</div>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.dateTime}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.campaign}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.campaign || "N/A"}</td>
                     <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
                       <div className="truncate" title={call.summary}>
                         {call.summary}

@@ -46,6 +46,9 @@ export function AgentPerformanceChart() {
           return
         }
 
+        console.log("Fetched call history data:", callHistoryData)
+        console.log("Start date for filtering:", startDate.toISOString())
+
         // Group calls by day
         const dailyData: Record<string, { count: number, completed: number }> = {}
         

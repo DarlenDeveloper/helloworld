@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect } from "react"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Plus, CalendarIcon, Edit, Trash2, Users, FolderOpen, Clock } from "lucide-react"
+import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users, FolderOpen, Clock } from "lucide-react"
 import { format } from "date-fns"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -13,52 +13,70 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
+import { createClient } from "@/lib/supabase/client"
+import type { User } from "@supabase/supabase-js"
 
-interface Contact {
+// DB types (subset)
+interface DbContactBatch {
   id: string
+  user_id: string
   name: string
-  phone: string
-  email: string
-  company: string
-  status: "new" | "called" | "follow-up" | "not-interested"
-  lastCalled?: Date
+  description: string | null
+  contact_count: number
+  created_at: string
+  updated_at: string
 }
 
-interface ContactBatch {
+interface DbContact {
   id: string
-  name: string
-  contacts: Contact[]
-  createdAt: Date
+  user_id: string
+  first_name: string
+  last_name: string
+  email: string | null
+  phone: string | null
+  company: string | null
+  status: "active" | "inactive" | "blocked"
 }
 
-interface KnowledgePrompt {
+interface DbCampaign {
   id: string
+  user_id: string
   name: string
-  content: string
-  documents: string[]
+  description: string | null
+  status: "draft" | "active" | "paused" | "completed" | "cancelled"
+  start_date: string | null
+  end_date: string | null
+  contact_count: number
+  calls_made: number
+  success_rate: number
+  created_at: string
+  updated_at: string
 }
 
-interface Campaign {
-  id: string
-  name: string
-  contactCount: number
-  scheduledDate: Date
-  timeframe: { start: string; end: string }
-  concurrentCalls: number
-  status: "scheduled" | "running" | "completed" | "incomplete"
-  prompt: string
-  selectedBatches: string[]
-}
-
-function getStatusColor(status: string) {
+function getContactBadgeColor(status: string) {
   switch (status) {
-    case "new":
+    case "active":
       return "bg-blue-100 text-blue-800"
-    case "called":
+    case "inactive":
+      return "bg-gray-100 text-gray-800"
+    case "blocked":
+      return "bg-red-100 text-red-800"
+    default:
+      return "bg-gray-100 text-gray-800"
+  }
+}
+
+function getCampaignStatusColor(status: string) {
+  switch (status) {
+    case "draft":
+      return "bg-blue-100 text-blue-800"
+    case "active":
       return "bg-green-100 text-green-800"
-    case "follow-up":
+    case "completed":
+      return "bg-gray-100 text-gray-800"
+    case "paused":
       return "bg-yellow-100 text-yellow-800"
-    case "not-interested":
+    case "cancelled":
       return "bg-red-100 text-red-800"
     default:
       return "bg-gray-100 text-gray-800"
@@ -66,76 +84,19 @@ function getStatusColor(status: string) {
 }
 
 export default function SchedulingPage() {
-  const [contactBatches, setContactBatches] = useState<ContactBatch[]>([
-    {
-      id: "1",
-      name: "Q1 Prospects",
-      createdAt: new Date(),
-      contacts: [
-        {
-          id: "1",
-          name: "John Smith",
-          phone: "+1-555-0123",
-          email: "john@company.com",
-          company: "Tech Corp",
-          status: "new",
-        },
-        {
-          id: "2",
-          name: "Sarah Johnson",
-          phone: "+1-555-0124",
-          email: "sarah@startup.com",
-          company: "StartupXYZ",
-          status: "called",
-          lastCalled: new Date(),
-        },
-      ],
-    },
-    {
-      id: "2",
-      name: "Enterprise Leads",
-      createdAt: new Date(),
-      contacts: [
-        {
-          id: "3",
-          name: "Mike Wilson",
-          phone: "+1-555-0125",
-          email: "mike@business.com",
-          company: "Business Inc",
-          status: "follow-up",
-        },
-      ],
-    },
-  ])
+  const supabase = createClient()
+  const router = useRouter()
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  const [campaigns, setCampaigns] = useState<Campaign[]>([
-    {
-      id: "1",
-      name: "Q1 Product Launch",
-      contactCount: 250,
-      scheduledDate: new Date(),
-      timeframe: { start: "09:00", end: "17:00" },
-      concurrentCalls: 5,
-      status: "scheduled",
-      prompt: "Hello, I'm calling about our new product launch...",
-      selectedBatches: ["1"],
-    },
-    {
-      id: "2",
-      name: "Enterprise Outreach",
-      contactCount: 150,
-      scheduledDate: new Date(Date.now() - 86400000),
-      timeframe: { start: "09:00", end: "17:00" },
-      concurrentCalls: 3,
-      status: "incomplete",
-      prompt: "Hello, I'm reaching out regarding enterprise solutions...",
-      selectedBatches: ["2"],
-    },
-  ])
-
+  const [contactBatches, setContactBatches] = useState<DbContactBatch[]>([])
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null)
+  const [selectedBatchContacts, setSelectedBatchContacts] = useState<DbContact[]>([])
+
+  const [campaigns, setCampaigns] = useState<DbCampaign[]>([])
   const [isCreateCampaignOpen, setIsCreateCampaignOpen] = useState(false)
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false)
+
   const [campaignForm, setCampaignForm] = useState({
     name: "",
     scheduledDate: "",
@@ -146,41 +107,170 @@ export default function SchedulingPage() {
     selectedBatches: [] as string[],
   })
 
-  const handleCreateBatch = () => {
-    const newBatch: ContactBatch = {
-      id: Date.now().toString(),
-      name: `New Batch ${contactBatches.length + 1}`,
-      contacts: [],
-      createdAt: new Date(),
+  // Derived map for quick lookups
+  const batchMap = useMemo(() => {
+    const m = new Map<string, DbContactBatch>()
+    contactBatches.forEach((b) => m.set(b.id, b))
+    return m
+  }, [contactBatches])
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser()
+        if (error) throw error
+        if (!user) {
+          // rely on middleware to redirect, but just in case
+          router.push("/auth")
+          return
+        }
+        setUser(user)
+        await Promise.all([fetchBatches(user.id), fetchCampaigns(user.id)])
+      } catch (e) {
+        console.error("Failed to initialize scheduling page:", e)
+      } finally {
+        setLoading(false)
+      }
     }
-    setContactBatches((prev) => [...prev, newBatch])
-  }
+    init()
+  }, [supabase, router])
 
-  const handleDeleteBatch = (batchId: string) => {
-    setContactBatches((prev) => prev.filter((batch) => batch.id !== batchId))
-  }
+  const fetchBatches = async (userId: string) => {
+    const { data, error } = await supabase
+      .from("contact_batches")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
 
-  const handleRenameBatch = (batchId: string, newName: string) => {
-    setContactBatches((prev) => prev.map((batch) => (batch.id === batchId ? { ...batch, name: newName } : batch)))
-  }
-
-  const getCampaignStatusColor = (status: string) => {
-    switch (status) {
-      case "scheduled":
-        return "bg-blue-100 text-blue-800"
-      case "running":
-        return "bg-green-100 text-green-800"
-      case "completed":
-        return "bg-gray-100 text-gray-800"
-      case "incomplete":
-        return "bg-yellow-100 text-yellow-800"
-      default:
-        return "bg-gray-100 text-gray-800"
+    if (error) {
+      console.error("Error fetching contact batches:", error)
+      return
     }
+    setContactBatches(data || [])
+  }
+
+  const fetchBatchContacts = async (batchId: string) => {
+    if (!user) return
+
+    // First fetch the contact IDs from the junction table
+    const { data: linkRows, error: linkErr } = await supabase
+      .from("batch_contacts")
+      .select("contact_id")
+      .eq("batch_id", batchId)
+
+    if (linkErr) {
+      console.error("Error fetching batch_contacts:", linkErr)
+      setSelectedBatchContacts([])
+      return
+    }
+
+    const ids = (linkRows || []).map((r) => r.contact_id)
+    if (ids.length === 0) {
+      setSelectedBatchContacts([])
+      return
+    }
+
+    const { data: contacts, error: contactsErr } = await supabase
+      .from("contacts")
+      .select("id, user_id, first_name, last_name, email, phone, company, status")
+      .in("id", ids)
+      .eq("user_id", user.id)
+
+    if (contactsErr) {
+      console.error("Error fetching contacts:", contactsErr)
+      setSelectedBatchContacts([])
+      return
+    }
+
+    setSelectedBatchContacts(contacts || [])
+  }
+
+  const fetchCampaigns = async (userId: string) => {
+    const { data, error } = await supabase
+      .from("campaigns")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      console.error("Error fetching campaigns:", error)
+      return
+    }
+    setCampaigns(data || [])
+  }
+
+  const handleCreateBatch = async () => {
+    if (!user) return
+    const defaultName = `New Batch ${contactBatches.length + 1}`
+
+    const { data, error } = await supabase
+      .from("contact_batches")
+      .insert({ user_id: user.id, name: defaultName, description: null })
+      .select("*")
+      .single()
+
+    if (error) {
+      console.error("Failed to create contact batch:", error)
+      alert("Failed to create batch")
+      return
+    }
+
+    setContactBatches((prev) => [data as DbContactBatch, ...prev])
+  }
+
+  const handleDeleteBatch = async (batchId: string) => {
+    if (!user) return
+    if (!confirm("Delete this batch?")) return
+
+    const { error } = await supabase
+      .from("contact_batches")
+      .delete()
+      .eq("id", batchId)
+      .eq("user_id", user.id)
+
+    if (error) {
+      console.error("Failed to delete batch:", error)
+      alert("Failed to delete batch")
+      return
+    }
+
+    setContactBatches((prev) => prev.filter((b) => b.id !== batchId))
+    if (selectedBatch === batchId) {
+      setSelectedBatch(null)
+      setSelectedBatchContacts([])
+    }
+  }
+
+  const handleRenameBatch = async (batchId: string, newName: string) => {
+    if (!user) return
+    const { data, error } = await supabase
+      .from("contact_batches")
+      .update({ name: newName })
+      .eq("id", batchId)
+      .eq("user_id", user.id)
+      .select("*")
+      .single()
+
+    if (error) {
+      console.error("Failed to rename batch:", error)
+      alert("Failed to rename batch")
+      return
+    }
+
+    setContactBatches((prev) => prev.map((b) => (b.id === batchId ? (data as DbContactBatch) : b)))
+  }
+
+  const handleBatchSelection = (batchId: string, checked: boolean) => {
+    setCampaignForm((prev) => ({
+      ...prev,
+      selectedBatches: checked
+        ? [...prev.selectedBatches, batchId]
+        : prev.selectedBatches.filter((id) => id !== batchId),
+    }))
   }
 
   const handleCreateCampaign = async () => {
-    console.log("[v0] Creating campaign with data:", campaignForm)
+    if (!user) return
 
     // Validation
     if (!campaignForm.name.trim()) {
@@ -206,30 +296,49 @@ export default function SchedulingPage() {
     setIsCreatingCampaign(true)
 
     try {
-      // Calculate total contacts from selected batches
-      const totalContacts = contactBatches
-        .filter((batch) => campaignForm.selectedBatches.includes(batch.id))
-        .reduce((sum, batch) => sum + batch.contacts.length, 0)
+      // Compute contact_count by summing selected batches' contact_count
+      const totalContacts = campaignForm.selectedBatches.reduce((sum, id) => sum + (batchMap.get(id)?.contact_count || 0), 0)
 
-      const newCampaign: Campaign = {
-        id: Date.now().toString(),
-        name: campaignForm.name,
-        contactCount: totalContacts,
-        scheduledDate: new Date(campaignForm.scheduledDate),
-        timeframe: {
-          start: campaignForm.startTime,
-          end: campaignForm.endTime,
-        },
-        concurrentCalls: campaignForm.concurrentCalls,
-        status: "scheduled",
-        prompt: campaignForm.prompt,
-        selectedBatches: campaignForm.selectedBatches,
+      // Build start/end dates
+      const dateOnly = campaignForm.scheduledDate // yyyy-MM-dd
+      const start = new Date(`${dateOnly}T${campaignForm.startTime}:00`)
+      const end = new Date(`${dateOnly}T${campaignForm.endTime}:00`)
+
+      // Store prompt and concurrentCalls in description for now
+      const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
+
+      const { data: newCampaign, error } = await supabase
+        .from("campaigns")
+        .insert({
+          user_id: user.id,
+          name: campaignForm.name.trim(),
+          description,
+          status: "draft",
+          start_date: start.toISOString(),
+          end_date: end.toISOString(),
+          contact_count: totalContacts,
+        })
+        .select("*")
+        .single()
+
+      if (error || !newCampaign) {
+        console.error("Failed to create campaign:", error)
+        alert("Failed to create campaign")
+        return
       }
 
-      console.log("[v0] New campaign created:", newCampaign)
+      // Link batches to the campaign
+      if (campaignForm.selectedBatches.length > 0) {
+        const rows = campaignForm.selectedBatches.map((batchId) => ({ campaign_id: newCampaign.id, batch_id: batchId }))
+        const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
+        if (linkErr) {
+          console.error("Failed to link campaign batches:", linkErr)
+          // Not fatal; continue
+        }
+      }
 
-      // Add to campaigns list
-      setCampaigns((prev) => [...prev, newCampaign])
+      // Update UI
+      setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
 
       // Reset form and close dialog
       setCampaignForm({
@@ -242,24 +351,29 @@ export default function SchedulingPage() {
         selectedBatches: [],
       })
       setIsCreateCampaignOpen(false)
-
-      // TODO: In a real app, this would make an API call to persist the campaign
-      // await fetch('/api/campaigns', { method: 'POST', body: JSON.stringify(newCampaign) })
-    } catch (error) {
-      console.error("[v0] Error creating campaign:", error)
+    } catch (err) {
+      console.error("Error creating campaign:", err)
       alert("Failed to create campaign. Please try again.")
     } finally {
       setIsCreatingCampaign(false)
     }
   }
 
-  const handleBatchSelection = (batchId: string, checked: boolean) => {
-    setCampaignForm((prev) => ({
-      ...prev,
-      selectedBatches: checked
-        ? [...prev.selectedBatches, batchId]
-        : prev.selectedBatches.filter((id) => id !== batchId),
-    }))
+  useEffect(() => {
+    if (selectedBatch) {
+      fetchBatchContacts(selectedBatch)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBatch])
+
+  if (loading) {
+    return (
+      <div className="p-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-gray-600">Loading scheduling...</div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -276,7 +390,7 @@ export default function SchedulingPage() {
               <Plus className="h-4 w-4 mr-2" />
               New Batch
             </Button>
-            <Button variant="outline" className="border-gray-300 bg-transparent">
+            <Button variant="outline" className="border-gray-300 bg-transparent" disabled>
               <Upload className="h-4 w-4 mr-2" />
               Import CSV
             </Button>
@@ -359,7 +473,10 @@ export default function SchedulingPage() {
                   {/* Contact Batches */}
                   <div className="space-y-2">
                     <Label>Select Contact Batches *</Label>
-                    <div className="space-y-2 max-h-32 overflow-y-auto border rounded-md p-3">
+                    <div className="space-y-2 max-h-40 overflow-y-auto border rounded-md p-3">
+                      {contactBatches.length === 0 && (
+                        <div className="text-sm text-gray-500">No batches yet. Create one to get started.</div>
+                      )}
                       {contactBatches.map((batch) => (
                         <div key={batch.id} className="flex items-center space-x-2">
                           <Checkbox
@@ -368,7 +485,7 @@ export default function SchedulingPage() {
                             onCheckedChange={(checked) => handleBatchSelection(batch.id, checked as boolean)}
                           />
                           <Label htmlFor={`batch-${batch.id}`} className="flex-1 cursor-pointer">
-                            {batch.name} ({batch.contacts.length} contacts)
+                            {batch.name} ({batch.contact_count} contacts)
                           </Label>
                         </div>
                       ))}
@@ -396,11 +513,7 @@ export default function SchedulingPage() {
                     >
                       Cancel
                     </Button>
-                    <Button
-                      onClick={handleCreateCampaign}
-                      disabled={isCreatingCampaign}
-                      className="bg-teal-500 hover:bg-teal-600"
-                    >
+                    <Button onClick={handleCreateCampaign} disabled={isCreatingCampaign} className="bg-teal-500 hover:bg-teal-600">
                       {isCreatingCampaign ? "Creating..." : "Create Campaign"}
                     </Button>
                   </div>
@@ -422,10 +535,10 @@ export default function SchedulingPage() {
                         ← Back
                       </Button>
                       <CardTitle className="text-black">
-                        {contactBatches.find((b) => b.id === selectedBatch)?.name}
+                        {batchMap.get(selectedBatch)?.name || "Contacts"}
                       </CardTitle>
                     </div>
-                    <Button variant="outline" size="sm">
+                    <Button variant="outline" size="sm" disabled>
                       <Plus className="h-4 w-4 mr-2" />
                       Add Contact
                     </Button>
@@ -433,32 +546,35 @@ export default function SchedulingPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {contactBatches
-                      .find((b) => b.id === selectedBatch)
-                      ?.contacts.map((contact) => (
-                        <div
-                          key={contact.id}
-                          className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
-                        >
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-black">{contact.name}</span>
-                              <Badge className={getStatusColor(contact.status)}>{contact.status}</Badge>
-                            </div>
-                            <div className="text-sm text-gray-600">
-                              {contact.phone} • {contact.email} • {contact.company}
-                            </div>
+                    {selectedBatchContacts.length === 0 && (
+                      <div className="text-sm text-gray-500">No contacts in this batch yet.</div>
+                    )}
+                    {selectedBatchContacts.map((contact) => (
+                      <div
+                        key={contact.id}
+                        className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-black">
+                              {contact.first_name} {contact.last_name}
+                            </span>
+                            <Badge className={getContactBadgeColor(contact.status)}>{contact.status}</Badge>
                           </div>
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="sm">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="sm" className="text-red-600">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                          <div className="text-sm text-gray-600">
+                            {contact.phone || "No phone"} • {contact.email || "No email"} • {contact.company || "No company"}
                           </div>
                         </div>
-                      ))}
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" disabled>
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="text-red-600" disabled>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
@@ -469,17 +585,22 @@ export default function SchedulingPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
+                    {contactBatches.length === 0 && (
+                      <div className="text-sm text-gray-500">No contact batches yet. Create one to get started.</div>
+                    )}
                     {contactBatches.map((batch) => (
                       <div
                         key={batch.id}
                         className="flex items-center gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
-                        onClick={() => setSelectedBatch(batch.id)}
+                        onClick={() => {
+                          setSelectedBatch(batch.id)
+                        }}
                       >
                         <FolderOpen className="h-5 w-5 text-teal-600" />
                         <div className="flex-1">
                           <div className="font-medium text-black">{batch.name}</div>
                           <div className="text-sm text-gray-600">
-                            {batch.contacts.length} contacts • Created {format(batch.createdAt, "MMM d, yyyy")}
+                            {batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -489,7 +610,7 @@ export default function SchedulingPage() {
                             onClick={(e) => {
                               e.stopPropagation()
                               const newName = prompt("Enter new batch name:", batch.name)
-                              if (newName) handleRenameBatch(batch.id, newName)
+                              if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim())
                             }}
                           >
                             <Edit className="h-4 w-4" />
@@ -500,7 +621,7 @@ export default function SchedulingPage() {
                             className="text-red-600"
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (confirm("Delete this batch?")) handleDeleteBatch(batch.id)
+                              handleDeleteBatch(batch.id)
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -518,19 +639,22 @@ export default function SchedulingPage() {
           <div>
             <Card>
               <CardHeader>
-                <CardTitle className="text-black">Active Campaigns</CardTitle>
+                <CardTitle className="text-black">Campaigns</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  {campaigns.length === 0 && (
+                    <div className="text-sm text-gray-500">No campaigns yet. Create one to get started.</div>
+                  )}
                   {campaigns.map((campaign) => (
                     <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex items-start justify-between mb-2">
                         <h3 className="font-medium text-black">{campaign.name}</h3>
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" disabled>
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-600 hover:text-red-700">
+                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-600 hover:text-red-700" disabled>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -538,24 +662,30 @@ export default function SchedulingPage() {
                       <div className="space-y-2 text-sm text-gray-600">
                         <div className="flex items-center gap-2">
                           <Users className="h-4 w-4" />
-                          {campaign.contactCount} contacts
+                          {campaign.contact_count} contacts
                         </div>
                         <div className="flex items-center gap-2">
                           <CalendarIcon className="h-4 w-4" />
-                          {format(campaign.scheduledDate, "MMM d, yyyy")}
+                          {campaign.start_date ? format(new Date(campaign.start_date), "MMM d, yyyy") : "N/A"}
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4" />
-                          {campaign.timeframe.start} - {campaign.timeframe.end}
+                          {campaign.start_date && campaign.end_date
+                            ? `${format(new Date(campaign.start_date), "HH:mm")} - ${format(
+                                new Date(campaign.end_date),
+                                "HH:mm",
+                              )}`
+                            : "N/A"}
                         </div>
                         <Badge className={getCampaignStatusColor(campaign.status)}>{campaign.status}</Badge>
-                        {campaign.status === "incomplete" && (
+                        {campaign.status === "paused" && (
                           <Button
                             variant="outline"
                             size="sm"
                             className="w-full mt-2 border-yellow-500 text-yellow-600 bg-transparent"
+                            disabled
                           >
-                            Reschedule Remaining Calls
+                            Resume Campaign
                           </Button>
                         )}
                       </div>

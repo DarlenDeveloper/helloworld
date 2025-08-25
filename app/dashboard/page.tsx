@@ -13,6 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AgentPerformanceChart } from "@/components/agent-performance-chart"
+import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
 import type { User } from '@supabase/supabase-js'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
@@ -105,6 +106,7 @@ export default function Dashboard() {
     avgDuration: 0,
     avgChangePercent: 0
   })
+  const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string }[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const supabase = createClient()
@@ -178,6 +180,7 @@ export default function Dashboard() {
         console.error("Error fetching call history:", callHistoryError)
       } else {
         calculateCallMetrics(callHistoryData as CallHistory[] || [])
+        calculateTalkingPoints(callHistoryData as CallHistory[] || [])
       }
 
       return () => {
@@ -240,6 +243,41 @@ export default function Dashboard() {
       avgDuration,
       avgChangePercent
     })
+  }
+
+  // Derive top talking points from call summaries/notes
+  const calculateTalkingPoints = (callHistoryData: CallHistory[]) => {
+    const text = callHistoryData
+      .map((c) => (c.ai_summary || c.notes || ""))
+      .join(" ")
+      .toLowerCase()
+
+    const tokens = text.match(/[a-zA-Z][a-zA-Z\-']{2,}/g) || []
+    const stop = new Set([
+      "the","and","for","you","with","that","this","from","have","your","are","was","were","but","not","they","their","them","our","out","had","has","all","can","will","would","could","should","about","there","what","when","where","how","why","which","been","also","into","more","less","call","calls","phone","number","agent","customer","client","email","address","hello","hi","thanks","thank","regarding","discuss","issue","issues","help","support"
+    ])
+
+    const freq = new Map<string, number>()
+    for (const t of tokens) {
+      if (stop.has(t)) continue
+      if (t.length < 4) continue
+      freq.set(t, (freq.get(t) || 0) + 1)
+    }
+
+    const top = Array.from(freq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+
+    const totalTop = top.reduce((s, [, n]) => s + n, 0) || 1
+    const colors = ["bg-teal-500", "bg-blue-500", "bg-yellow-500", "bg-red-500"]
+
+    const points = top.map(([label, n], i) => ({
+      label: label.replace(/\b\w/g, (c) => c.toUpperCase()),
+      percent: Math.round((n / totalTop) * 100),
+      color: colors[i] || "bg-gray-400",
+    }))
+
+    setTalkingPoints(points)
   }
   
   if (loading) {
@@ -543,66 +581,36 @@ export default function Dashboard() {
             </Select>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center h-64">
-              <div className="relative w-48 h-48">
-                <svg className="w-48 h-48 transform -rotate-90" viewBox="0 0 36 36">
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#e5e7eb"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#14b8a6"
-                    strokeWidth="2"
-                    strokeDasharray="35, 100"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#3b82f6"
-                    strokeWidth="2"
-                    strokeDasharray="25, 100"
-                    strokeDashoffset="-35"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#f59e0b"
-                    strokeWidth="2"
-                    strokeDasharray="20, 100"
-                    strokeDashoffset="-60"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#ef4444"
-                    strokeWidth="2"
-                    strokeDasharray="20, 100"
-                    strokeDashoffset="-80"
-                  />
-                </svg>
-              </div>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={talkingPoints.map((tp) => ({ name: tp.label, value: tp.percent }))}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={90}
+                  >
+                    {talkingPoints.map((_, idx) => {
+                      const hexColors = ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444"]
+                      return <Cell key={idx} fill={hexColors[idx % hexColors.length]} />
+                    })}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs mt-4">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-teal-500 rounded-full"></div>
-                <span>Refund Requests (35%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <span>Location Inquiries (25%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                <span>Product Support (20%)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                <span>Billing Issues (20%)</span>
-              </div>
+              {talkingPoints.length === 0 ? (
+                <div className="text-gray-500 col-span-2">Not enough data</div>
+              ) : (
+                talkingPoints.map((tp, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <div className={`w-3 h-3 ${tp.color} rounded-full`}></div>
+                    <span>{tp.label} ({tp.percent}%)</span>
+                  </div>
+                ))
+              )}
             </div>
           </CardContent>
         </Card>

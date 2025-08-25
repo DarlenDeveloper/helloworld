@@ -13,6 +13,7 @@ import { AgentPerformanceChart } from "@/components/agent-performance-chart"
 export default function CallHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedCampaign, setSelectedCampaign] = useState("all")
+  const [campaignOptions, setCampaignOptions] = useState<string[]>(["all"])
   const [selectedFilter, setSelectedFilter] = useState("all")
   const [dateRange, setDateRange] = useState<string>("Last 7 days")
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
@@ -36,37 +37,63 @@ export default function CallHistoryPage() {
 
       setUserId(user.id)
 
+      // fetch from call_history and include campaign name
       const { data, error } = await supabase
-        .from("calls")
-        .select("*")
+        .from("call_history")
+        .select("*, campaigns(name)")
+        .eq("user_id", user.id)
+        .order("call_date", { ascending: false })
+        .limit(200)
+
+      // load campaign names from campaigns table for filter options
+      const { data: camps, error: campsErr } = await supabase
+        .from("campaigns")
+        .select("name")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
-        .limit(50)
+
+      if (!campsErr) {
+        const names = Array.from(new Set(["all", ...((camps || []).map((c: any) => c.name).filter(Boolean))]))
+        setCampaignOptions(names)
+      }
 
       if (error) {
         console.error("Error fetching call history:", JSON.stringify(error, null, 2))
         setFetchError("Failed to fetch call history. Please try again later.")
       } else {
-        // Format calls similar to dashboard
-        const formattedCalls = (data || []).map((call: any) => ({
-          id: call.id,
-          status:
+        // Format calls from call_history
+        const formattedCalls = (data || []).map((call: any) => {
+          const mappedStatus =
             call.status === "completed"
               ? "Resolved"
-              : call.status === "missed"
-              ? "Not Resolved"
-              : "In Progress",
-          contact: call.customer_phone || call.phone || "Unknown",
-          dateTime: new Date(call.created_at).toLocaleString(),
-          statusColor:
-            call.status === "completed"
-              ? "bg-green-500"
-              : call.status === "missed"
-              ? "bg-red-500"
-              : "bg-yellow-500",
-          summary: call.notes || "No summary available",
-          duration: call.duration || 0,
-        }))
+              : call.status === "no_answer"
+              ? "No Response"
+              : call.status === "busy"
+              ? "Busy"
+              : call.status === "voicemail"
+              ? "Voicemail"
+              : "Not Resolved"
+
+          return {
+            id: call.id,
+            status: mappedStatus,
+            contact: call.phone_number || "Unknown",
+            dateTime: new Date(call.call_date || call.created_at).toLocaleString(),
+            statusColor:
+              mappedStatus === "Resolved"
+                ? "bg-green-500"
+                : mappedStatus === "No Response"
+                ? "bg-gray-500"
+                : mappedStatus === "Busy"
+                ? "bg-yellow-500"
+                : mappedStatus === "Voicemail"
+                ? "bg-blue-500"
+                : "bg-red-500",
+            summary: call.ai_summary || call.notes || "No summary available",
+            duration: call.duration || 0,
+            campaignName: call.campaigns?.name || null,
+          }
+        })
         setCallHistory(formattedCalls)
         setFetchError(null)
       }
@@ -74,27 +101,15 @@ export default function CallHistoryPage() {
 
     fetchUserAndCalls()
 
-    // Set up real-time subscription to calls table
+    // Set up real-time subscription to call_history table
     const subscription = supabase
-      .channel("public:calls")
+      .channel("public:call_history")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "calls" },
-        (payload) => {
-          setCallHistory((current) => {
-            switch (payload.eventType) {
-              case "INSERT":
-                return [payload.new, ...current]
-              case "UPDATE":
-                return current.map((call) =>
-                  call.id === payload.new.id ? payload.new : call
-                )
-              case "DELETE":
-                return current.filter((call) => call.id !== payload.old.id)
-              default:
-                return current
-            }
-          })
+        { event: "*", schema: "public", table: "call_history" },
+        () => {
+          // refetch on any change
+          fetchUserAndCalls()
         }
       )
       .subscribe()
@@ -108,11 +123,10 @@ export default function CallHistoryPage() {
   const filteredData = callHistory.filter((call) => {
     const matchesSearch =
       call.contact?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      call.phone?.includes(searchTerm) ||
       call.summary?.toLowerCase().includes(searchTerm.toLowerCase())
 
-    const matchesCampaign =
-      selectedCampaign === "all" || call.campaign?.toLowerCase().includes(selectedCampaign.toLowerCase())
+    const matchesCampaign = selectedCampaign === "all" ||
+      (typeof call.campaignName === "string" && call.campaignName.toLowerCase().includes(selectedCampaign.toLowerCase()))
 
     const matchesFilter = selectedFilter === "all" || call.status?.toLowerCase().replace(" ", "-") === selectedFilter
 
@@ -143,14 +157,14 @@ export default function CallHistoryPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "Follow Up":
-        return "bg-yellow-100 text-yellow-800"
-      case "Not Interested":
+      case "Resolved":
+        return "bg-green-100 text-green-800"
+      case "Not Resolved":
         return "bg-red-100 text-red-800"
-      case "No Response":
-        return "bg-gray-100 text-gray-800"
+      case "In Progress":
+        return "bg-yellow-100 text-yellow-800"
       default:
-        return "bg-blue-100 text-blue-800"
+        return "bg-gray-100 text-gray-800"
     }
   }
 
@@ -243,9 +257,11 @@ export default function CallHistoryPage() {
             <SelectValue placeholder="Select Campaign" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Campaigns</SelectItem>
-            <SelectItem value="q1">Q1 Leads</SelectItem>
-            <SelectItem value="q3-instagram">Q3 Instagram Leads</SelectItem>
+            {campaignOptions.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt === "all" ? "All Campaigns" : opt}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -255,9 +271,11 @@ export default function CallHistoryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="follow-up">Follow Up</SelectItem>
-            <SelectItem value="not-interested">Not Interested</SelectItem>
+            <SelectItem value="resolved">Resolved</SelectItem>
+            <SelectItem value="not-resolved">Not Resolved</SelectItem>
             <SelectItem value="no-response">No Response</SelectItem>
+            <SelectItem value="busy">Busy</SelectItem>
+            <SelectItem value="voicemail">Voicemail</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -303,7 +321,7 @@ export default function CallHistoryPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.dateTime}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.campaign || "N/A"}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.campaignName || "N/A"}</td>
                     <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
                       <div className="truncate" title={call.summary}>
                         {call.summary}

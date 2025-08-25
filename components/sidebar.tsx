@@ -12,7 +12,7 @@ export function Sidebar() {
   const [isExpanded, setIsExpanded] = useState(false)
 
   const menuItems = [
-    { icon: LayoutGrid, href: "/", label: "Dashboard", active: pathname === "/" },
+    { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
     { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },

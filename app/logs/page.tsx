@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { createClient } from "@/lib/supabase/client"
 import { Search, Filter, Download, Eye, Calendar, User, Clock, Shield } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,140 +11,174 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
+interface LoginLog {
+  id: string
+  user_id: string
+  email: string
+  status: "success" | "failed" | "blocked"
+  ip_address: string | null
+  user_agent: string | null
+  location: string | null
+  device: string | null
+  session_duration: number | null // minutes
+  login_time: string // ISO
+}
+
 export default function LogsPage() {
+  const supabase = createClient()
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [timeFilter, setTimeFilter] = useState("7days")
-  const [selectedLog, setSelectedLog] = useState(null)
+  const [selectedLog, setSelectedLog] = useState<LoginLog | null>(null)
 
-  // Mock login logs data
-  const loginLogs = [
-    {
-      id: "LOG-001",
-      user: "john.doe@company.com",
-      userName: "John Doe",
-      status: "Success",
-      timestamp: "2024-12-15 14:32:15",
-      ipAddress: "192.168.1.100",
-      location: "New York, NY",
-      device: "Chrome 120.0 on Windows 10",
-      sessionDuration: "2h 45m",
-      details: {
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        loginMethod: "Email & Password",
-        mfaUsed: true,
-        riskScore: "Low",
-      },
-    },
-    {
-      id: "LOG-002",
-      user: "sarah.wilson@company.com",
-      userName: "Sarah Wilson",
-      status: "Failed",
-      timestamp: "2024-12-15 13:45:22",
-      ipAddress: "203.0.113.45",
-      location: "Los Angeles, CA",
-      device: "Safari 17.0 on macOS",
-      sessionDuration: "N/A",
-      details: {
-        userAgent:
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        loginMethod: "Email & Password",
-        mfaUsed: false,
-        riskScore: "Medium",
-        failureReason: "Invalid password",
-      },
-    },
-    {
-      id: "LOG-003",
-      user: "mike.johnson@company.com",
-      userName: "Mike Johnson",
-      status: "Success",
-      timestamp: "2024-12-15 12:18:33",
-      ipAddress: "198.51.100.22",
-      location: "Chicago, IL",
-      device: "Firefox 121.0 on Ubuntu",
-      sessionDuration: "1h 23m",
-      details: {
-        userAgent: "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-        loginMethod: "SSO (Google)",
-        mfaUsed: true,
-        riskScore: "Low",
-      },
-    },
-    {
-      id: "LOG-004",
-      user: "admin@company.com",
-      userName: "System Admin",
-      status: "Locked",
-      timestamp: "2024-12-15 11:55:41",
-      ipAddress: "192.168.1.50",
-      location: "New York, NY",
-      device: "Chrome 120.0 on Windows 11",
-      sessionDuration: "N/A",
-      details: {
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        loginMethod: "Email & Password",
-        mfaUsed: false,
-        riskScore: "High",
-        failureReason: "Account locked due to multiple failed attempts",
-      },
-    },
-    {
-      id: "LOG-005",
-      user: "emma.davis@company.com",
-      userName: "Emma Davis",
-      status: "Success",
-      timestamp: "2024-12-15 10:30:12",
-      ipAddress: "172.16.0.15",
-      location: "Seattle, WA",
-      device: "Edge 120.0 on Windows 10",
-      sessionDuration: "3h 12m",
-      details: {
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-        loginMethod: "Email & Password",
-        mfaUsed: true,
-        riskScore: "Low",
-      },
-    },
-  ]
+  const [logs, setLogs] = useState<LoginLog[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const filteredLogs = loginLogs.filter((log) => {
-    const matchesSearch =
-      log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.userName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.ipAddress.includes(searchTerm)
-    const matchesStatus = statusFilter === "all" || log.status.toLowerCase() === statusFilter.toLowerCase()
-    return matchesSearch && matchesStatus
-  })
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
 
-  const getStatusColor = (status) => {
+        await fetchLogs(user.id)
+
+        // subscribe to real-time changes
+        const channel = supabase
+          .channel("user_login_logs_changes")
+          .on("postgres_changes", { event: "*", schema: "public", table: "user_login_logs", filter: `user_id=eq.${user.id}` }, () => {
+            fetchLogs(user.id)
+          })
+          .subscribe()
+        return () => {
+          supabase.removeChannel(channel)
+        }
+      } finally {
+        setLoading(false)
+      }
+    }
+    init()
+  }, [supabase])
+
+  const fetchLogs = async (userId: string) => {
+    const { data, error } = await supabase
+      .from("user_login_logs")
+      .select("*")
+      .eq("user_id", userId)
+      .order("login_time", { ascending: false })
+      .limit(500)
+
+    if (error) {
+      console.error("Failed to fetch login logs:", error)
+      return
+    }
+    setLogs((data || []) as LoginLog[])
+  }
+
+  const filteredLogs = useMemo(() => {
+    const now = new Date()
+    const startCutoff = new Date(now)
+    if (timeFilter === "1day") startCutoff.setDate(now.getDate() - 1)
+    else if (timeFilter === "7days") startCutoff.setDate(now.getDate() - 7)
+    else if (timeFilter === "30days") startCutoff.setDate(now.getDate() - 30)
+    else if (timeFilter === "90days") startCutoff.setDate(now.getDate() - 90)
+
+    return logs.filter((log) => {
+      const matchesSearch =
+        log.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.ip_address?.includes(searchTerm) ||
+        log.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.device?.toLowerCase().includes(searchTerm.toLowerCase())
+
+      const matchesStatus = statusFilter === "all" || log.status === (statusFilter as LoginLog["status"])
+
+      const logTime = new Date(log.login_time)
+      const matchesTime = logTime >= startCutoff
+
+      return matchesSearch && matchesStatus && matchesTime
+    })
+  }, [logs, searchTerm, statusFilter, timeFilter])
+
+  // Metrics derived from filtered logs
+  const metrics = useMemo(() => {
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const todayCount = logs.filter((l) => new Date(l.login_time) >= todayStart).length
+    const windowLogs = filteredLogs
+    const total = windowLogs.length || 1
+    const successCount = windowLogs.filter((l) => l.status === "success").length
+    const failedLastDay = logs.filter((l) => {
+      const t = new Date(l.login_time)
+      const cutoff = new Date(now)
+      cutoff.setDate(now.getDate() - 1)
+      return l.status === "failed" && t >= cutoff
+    }).length
+
+    const successRate = Math.round((successCount / total) * 1000) / 10 // one decimal
+    // Active sessions is not tracked; approximate with count of success in last 60 minutes
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000)
+    const activeSessions = logs.filter((l) => l.status === "success" && new Date(l.login_time) >= oneHourAgo).length
+
+    return { todayCount, successRate, failedLastDay, activeSessions }
+  }, [logs, filteredLogs])
+
+  const getStatusColor = (status: LoginLog["status"]) => {
     switch (status) {
-      case "Success":
+      case "success":
         return "bg-green-100 text-green-700 border-green-200"
-      case "Failed":
+      case "failed":
         return "bg-red-100 text-red-700 border-red-200"
-      case "Locked":
+      case "blocked":
         return "bg-orange-100 text-orange-700 border-orange-200"
       default:
         return "bg-gray-100 text-gray-700 border-gray-200"
     }
   }
 
-  const getRiskColor = (risk) => {
+  const getRiskColor = (risk: string) => {
     switch (risk) {
       case "Low":
+      case "low":
         return "text-green-600"
       case "Medium":
+      case "medium":
         return "text-yellow-600"
       case "High":
+      case "high":
         return "text-red-600"
       default:
         return "text-gray-600"
     }
+  }
+
+  const exportCSV = () => {
+    const rows = [
+      ["email", "status", "login_time", "ip_address", "location", "device", "session_duration"],
+      ...filteredLogs.map((l) => [
+        l.email,
+        l.status,
+        new Date(l.login_time).toISOString(),
+        l.ip_address || "",
+        l.location || "",
+        l.device || "",
+        l.session_duration?.toString() || "",
+      ]),
+    ]
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "user_login_logs.csv"
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 ml-16">
+        <div className="text-gray-600">Loading logs...</div>
+      </div>
+    )
   }
 
   return (
@@ -154,7 +189,7 @@ export default function LogsPage() {
           <h1 className="text-2xl font-semibold text-black">User Login Logs</h1>
           <p className="text-gray-600 mt-1">Monitor and track user authentication events</p>
         </div>
-        <Button className="bg-teal-500 hover:bg-teal-600 text-white">
+        <Button className="bg-teal-500 hover:bg-teal-600 text-white" onClick={exportCSV}>
           <Download className="h-4 w-4 mr-2" />
           Export Logs
         </Button>
@@ -170,8 +205,8 @@ export default function LogsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-black">247</div>
-            <p className="text-xs text-green-600 mt-1">+12% from yesterday</p>
+            <div className="text-2xl font-bold text-black">{metrics.todayCount}</div>
+            <p className="text-xs text-green-600 mt-1">Updated live</p>
           </CardContent>
         </Card>
 
@@ -183,8 +218,8 @@ export default function LogsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-black">94.2%</div>
-            <p className="text-xs text-green-600 mt-1">+2.1% from last week</p>
+            <div className="text-2xl font-bold text-black">{metrics.successRate}%</div>
+            <p className="text-xs text-gray-600 mt-1">Within selected range</p>
           </CardContent>
         </Card>
 
@@ -192,12 +227,12 @@ export default function LogsPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
               <Clock className="h-4 w-4 mr-2" />
-              Failed Attempts
+              Failed Attempts (24h)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-black">14</div>
-            <p className="text-xs text-red-600 mt-1">-8% from yesterday</p>
+            <div className="text-2xl font-bold text-black">{metrics.failedLastDay}</div>
+            <p className="text-xs text-red-600 mt-1">Past 24 hours</p>
           </CardContent>
         </Card>
 
@@ -205,12 +240,12 @@ export default function LogsPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
               <Calendar className="h-4 w-4 mr-2" />
-              Active Sessions
+              Active Sessions (~1h)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-black">89</div>
-            <p className="text-xs text-gray-600 mt-1">Currently online</p>
+            <div className="text-2xl font-bold text-black">{metrics.activeSessions}</div>
+            <p className="text-xs text-gray-600 mt-1">Approximate</p>
           </CardContent>
         </Card>
       </div>
@@ -223,10 +258,10 @@ export default function LogsPage() {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search by email, name, or IP address..."
+                  placeholder="Search by email, IP, location, or device..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 border-gray-200"
+                  className="pl-10 border-gray-2 00"
                 />
               </div>
             </div>
@@ -238,7 +273,7 @@ export default function LogsPage() {
                 <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value="success">Success</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="locked">Locked</SelectItem>
+                <SelectItem value="blocked">Blocked</SelectItem>
               </SelectContent>
             </Select>
             <Select value={timeFilter} onValueChange={setTimeFilter}>
@@ -284,8 +319,8 @@ export default function LogsPage() {
                 <TableRow key={log.id} className="hover:bg-gray-50">
                   <TableCell>
                     <div>
-                      <div className="font-medium text-black">{log.userName}</div>
-                      <div className="text-sm text-gray-500">{log.user}</div>
+                      <div className="font-medium text-black">{log.email}</div>
+                      <div className="text-sm text-gray-500">User ID: {log.user_id}</div>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -293,11 +328,13 @@ export default function LogsPage() {
                       {log.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-black font-mono text-sm">{log.timestamp}</TableCell>
-                  <TableCell className="text-black font-mono">{log.ipAddress}</TableCell>
-                  <TableCell className="text-black">{log.location}</TableCell>
-                  <TableCell className="text-black text-sm">{log.device}</TableCell>
-                  <TableCell className="text-black">{log.sessionDuration}</TableCell>
+                  <TableCell className="text-black font-mono text-sm">
+                    {new Date(log.login_time).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-black font-mono">{log.ip_address || "-"}</TableCell>
+                  <TableCell className="text-black">{log.location || "-"}</TableCell>
+                  <TableCell className="text-black text-sm">{log.device || "-"}</TableCell>
+                  <TableCell className="text-black">{log.session_duration ? `${log.session_duration} min` : "-"}</TableCell>
                   <TableCell>
                     <Dialog>
                       <DialogTrigger asChild>
@@ -320,8 +357,8 @@ export default function LogsPage() {
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="text-sm font-medium text-gray-600">User:</label>
-                                <p className="font-medium">{selectedLog.userName}</p>
-                                <p className="text-sm text-gray-500">{selectedLog.user}</p>
+                                <p className="font-medium">{selectedLog.email}</p>
+                                <p className="text-sm text-gray-500">User ID: {selectedLog.user_id}</p>
                               </div>
                               <div>
                                 <label className="text-sm font-medium text-gray-600">Status:</label>
@@ -336,60 +373,34 @@ export default function LogsPage() {
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="text-sm font-medium text-gray-600">Timestamp:</label>
-                                <p className="font-mono">{selectedLog.timestamp}</p>
+                                <p className="font-mono">{new Date(selectedLog.login_time).toLocaleString()}</p>
                               </div>
                               <div>
                                 <label className="text-sm font-medium text-gray-600">Session Duration:</label>
-                                <p>{selectedLog.sessionDuration}</p>
+                                <p>{selectedLog.session_duration ? `${selectedLog.session_duration} min` : "-"}</p>
                               </div>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="text-sm font-medium text-gray-600">IP Address:</label>
-                                <p className="font-mono">{selectedLog.ipAddress}</p>
+                                <p className="font-mono">{selectedLog.ip_address || "-"}</p>
                               </div>
                               <div>
                                 <label className="text-sm font-medium text-gray-600">Location:</label>
-                                <p>{selectedLog.location}</p>
+                                <p>{selectedLog.location || "-"}</p>
                               </div>
                             </div>
 
                             <div>
                               <label className="text-sm font-medium text-gray-600">Device & Browser:</label>
-                              <p>{selectedLog.device}</p>
-                            </div>
-
-                            <div className="border-t pt-4">
-                              <h4 className="font-medium text-black mb-3">Security Details</h4>
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <label className="text-sm font-medium text-gray-600">Login Method:</label>
-                                  <p>{selectedLog.details.loginMethod}</p>
-                                </div>
-                                <div>
-                                  <label className="text-sm font-medium text-gray-600">MFA Used:</label>
-                                  <p>{selectedLog.details.mfaUsed ? "Yes" : "No"}</p>
-                                </div>
-                              </div>
-                              <div className="mt-4">
-                                <label className="text-sm font-medium text-gray-600">Risk Score:</label>
-                                <p className={`font-medium ${getRiskColor(selectedLog.details.riskScore)}`}>
-                                  {selectedLog.details.riskScore}
-                                </p>
-                              </div>
-                              {selectedLog.details.failureReason && (
-                                <div className="mt-4">
-                                  <label className="text-sm font-medium text-gray-600">Failure Reason:</label>
-                                  <p className="text-red-600">{selectedLog.details.failureReason}</p>
-                                </div>
-                              )}
+                              <p>{selectedLog.device || "-"}</p>
                             </div>
 
                             <div className="border-t pt-4">
                               <label className="text-sm font-medium text-gray-600">User Agent:</label>
                               <p className="text-sm text-gray-700 font-mono break-all mt-1">
-                                {selectedLog.details.userAgent}
+                                {selectedLog.user_agent || "-"}
                               </p>
                             </div>
                           </div>

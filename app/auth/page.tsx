@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Eye, EyeOff, Bot } from "lucide-react"
+import { Eye, EyeOff } from "lucide-react"
 
 export default function Auth() {
   const [email, setEmail] = useState("")
@@ -240,20 +240,8 @@ export default function Auth() {
     <div className="min-h-screen flex">
       {/* Left side - Auth Form */}
       <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 p-8">
-        <Card className="w-full max-w-md shadow-xl">
-          <CardHeader className="text-center pb-8">
-            <div className="flex justify-center mb-6">
-              <div className="p-4 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl shadow-lg">
-                <Bot className="h-10 w-10 text-white" />
-              </div>
-            </div>
-            <CardTitle className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">
-              AIRIES AI CRM
-            </CardTitle>
-            <CardDescription className="text-lg text-gray-600 mt-2">
-              Your Intelligent Customer Companion
-            </CardDescription>
-          </CardHeader>
+        <Card className="w-full max-w-md shadow-xl bg-white/60 backdrop-blur border border-white/40">
+          <CardHeader className="pb-4" />
           <CardContent className="pb-8">
             <Tabs defaultValue="signin" className="w-full" onValueChange={resetForm}>
               <TabsList className="grid w-full grid-cols-3 mb-8">

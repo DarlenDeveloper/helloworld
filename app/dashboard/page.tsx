@@ -7,6 +7,7 @@ import { Filter, LogOut, Plus, Eye, UserIcon } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -120,6 +121,10 @@ export default function Dashboard() {
   })
   const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string }[]>([])
   const [loading, setLoading] = useState(true)
+  const [needsOrg, setNeedsOrg] = useState(false)
+  const [orgCreateName, setOrgCreateName] = useState("")
+  const [orgCreating, setOrgCreating] = useState(false)
+  const [orgError, setOrgError] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
 
@@ -143,8 +148,9 @@ export default function Dashboard() {
 
       const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
       if (!membership) {
-        // No organization; redirect to settings to create/join an organization
-        router.push('/settings')
+        // No organization membership yet: show inline onboarding instead of redirecting to settings
+        setNeedsOrg(true)
+        setLoading(false)
         return
       }
       setOrgId(membership.organization_id)
@@ -307,6 +313,66 @@ export default function Dashboard() {
     setTalkingPoints(points)
   }
   
+  const handleCreateOrganization = async () => {
+    setOrgError(null)
+    if (!orgCreateName.trim()) {
+      setOrgError("Organization name is required")
+      return
+    }
+    setOrgCreating(true)
+    try {
+      await supabase.rpc('create_organization', { p_name: orgCreateName.trim() })
+      // Resolve membership again
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data: membershipRows } = await supabase
+        .from('organization_members')
+        .select('organization_id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+      if (membership) {
+        setOrgId(membership.organization_id)
+        setNeedsOrg(false)
+        await fetchData(membership.organization_id)
+      }
+    } catch (e) {
+      console.error(e)
+      setOrgError("Failed to create organization. Please try again.")
+    } finally {
+      setOrgCreating(false)
+    }
+  }
+
+  if (needsOrg) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Create Your Organization</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">Enter your organization name to get started.</p>
+              <Input
+                placeholder="Organization Name"
+                value={orgCreateName}
+                onChange={(e) => setOrgCreateName(e.target.value)}
+              />
+              {orgError && <p className="text-sm text-red-600">{orgError}</p>}
+              <div className="flex justify-end">
+                <Button onClick={handleCreateOrganization} disabled={orgCreating} className="bg-teal-500 hover:bg-teal-600">
+                  {orgCreating ? "Creating..." : "Create Organization"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">

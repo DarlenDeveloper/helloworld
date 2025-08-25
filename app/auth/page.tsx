@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -17,11 +18,13 @@ export default function Auth() {
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [fullName, setFullName] = useState("")
+  const [orgName, setOrgName] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
+  const [role, setRole] = useState<"admin" | "manager" | "agent" | "viewer">("admin")
   const router = useRouter()
   const supabase = createClient()
 
@@ -90,6 +93,12 @@ export default function Auth() {
       return
     }
 
+    if (!orgName.trim()) {
+      setError("Organization name is required")
+      setLoading(false)
+      return
+    }
+
     try {
       const { data, error } = await supabase.auth.signUp({
         email,
@@ -98,6 +107,8 @@ export default function Auth() {
           emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || `${window.location.origin}/dashboard`,
           data: {
             full_name: fullName.trim(),
+            org_name: orgName.trim(),
+            role,
           },
         },
       })
@@ -105,11 +116,12 @@ export default function Auth() {
       if (error) {
         setError(error.message)
       } else if (data.user) {
-        setSuccess("Check your email for a verification link!")
+        setSuccess("Account created. Check your email for a verification link!")
         setEmail("")
         setPassword("")
         setConfirmPassword("")
         setFullName("")
+        setOrgName("")
       }
     } catch (err) {
       setError("An unexpected error occurred")
@@ -123,10 +135,12 @@ export default function Auth() {
     setPassword("")
     setConfirmPassword("")
     setFullName("")
+    setOrgName("")
     setError("")
     setSuccess("")
     setShowPassword(false)
     setShowConfirmPassword(false)
+    setRole("admin")
   }
 
   return (
@@ -246,6 +260,22 @@ export default function Auth() {
                   </div>
 
                   <div className="space-y-2">
+                    <Label htmlFor="signup-orgname" className="text-sm font-medium">
+                      Organization Name
+                    </Label>
+                    <Input
+                      id="signup-orgname"
+                      type="text"
+                      placeholder="Enter your organization name"
+                      value={orgName}
+                      onChange={(e) => setOrgName(e.target.value)}
+                      required
+                      disabled={loading}
+                      className="h-12"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
                     <Label htmlFor="signup-email" className="text-sm font-medium">
                       Email Address
                     </Label>
@@ -259,6 +289,23 @@ export default function Auth() {
                       disabled={loading}
                       className="h-12"
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="signup-role" className="text-sm font-medium">
+                      Your Role
+                    </Label>
+                    <Select value={role} onValueChange={(v) => setRole(v as any)}>
+                      <SelectTrigger className="h-12">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="admin">Administrator</SelectItem>
+                        <SelectItem value="manager">Manager</SelectItem>
+                        <SelectItem value="agent">Agent</SelectItem>
+                        <SelectItem value="viewer">Viewer</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-2">

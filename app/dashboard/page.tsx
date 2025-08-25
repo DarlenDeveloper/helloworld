@@ -148,8 +148,15 @@ export default function Dashboard() {
 
       const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
       if (!membership) {
-        // No organization membership yet: show inline onboarding instead of redirecting to settings
-        setNeedsOrg(true)
+        // Attempt to auto-recover membership before asking user to create an organization
+        const attached = await ensureMembership(user)
+        if (!attached) {
+          setNeedsOrg(true)
+          setLoading(false)
+          return
+        }
+        setOrgId(attached)
+        await fetchData(attached)
         setLoading(false)
         return
       }
@@ -222,6 +229,68 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Error fetching data:", error)
     }
+  }
+
+  // Try to ensure the user has a membership by linking to an existing org they own or via account_emails
+  const ensureMembership = async (u: User): Promise<string | null> => {
+    try {
+      // 1) If user created an organization (created_by), attach as first/admin member if needed
+      const { data: orgRows } = await supabase
+        .from('organizations')
+        .select('id')
+        .eq('created_by', u.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+      const ownOrg = (orgRows || [])[0] as { id: string } | undefined
+      const roleMeta = (u.user_metadata?.role as string) || 'admin'
+      const safeRole = ['admin','manager','agent','viewer'].includes(roleMeta) ? roleMeta : 'admin'
+
+      if (ownOrg?.id) {
+        // attempt insert membership (allowed by policy for first member)
+        await supabase
+          .from('organization_members')
+          .insert({ organization_id: ownOrg.id, user_id: u.id, role: safeRole as any })
+          .select('organization_id')
+        // re-check membership
+        const { data: membershipRows } = await supabase
+          .from('organization_members')
+          .select('organization_id')
+          .eq('user_id', u.id)
+          .order('created_at', { ascending: true })
+          .limit(1)
+        const m = (membershipRows || [])[0] as { organization_id: string } | undefined
+        if (m?.organization_id) return m.organization_id
+      }
+
+      // 2) If admin added this user's email in account_emails, attempt to join that org
+      const userEmail = (u.email || '').toLowerCase()
+      if (userEmail) {
+        const { data: emailRows } = await supabase
+          .from('account_emails')
+          .select('organization_id')
+          .eq('email', userEmail)
+          .order('created_at', { ascending: true })
+          .limit(1)
+        const emailOrg = (emailRows || [])[0] as { organization_id: string } | undefined
+        if (emailOrg?.organization_id) {
+          await supabase
+            .from('organization_members')
+            .insert({ organization_id: emailOrg.organization_id, user_id: u.id, role: 'agent' as any })
+            .select('organization_id')
+          const { data: membershipRows2 } = await supabase
+            .from('organization_members')
+            .select('organization_id')
+            .eq('user_id', u.id)
+            .order('created_at', { ascending: true })
+            .limit(1)
+          const m2 = (membershipRows2 || [])[0] as { organization_id: string } | undefined
+          if (m2?.organization_id) return m2.organization_id
+        }
+      }
+    } catch (e) {
+      console.error('ensureMembership failed:', e)
+    }
+    return null
   }
 
   const handleLogout = async () => {

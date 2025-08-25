@@ -12,7 +12,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AgentPerformanceChart } from "@/components/agent-performance-chart"
+import dynamic from "next/dynamic"
+const AgentPerformanceChart = dynamic(
+  () => import("@/components/agent-performance-chart").then((m) => m.AgentPerformanceChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-64 flex items-center justify-center">
+        <div className="animate-pulse h-40 w-full bg-gray-200 rounded"></div>
+      </div>
+    ),
+  }
+)
 import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
 import type { User } from '@supabase/supabase-js'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -93,6 +104,7 @@ export default function Dashboard() {
   const [callType, setCallType] = useState<'inbound' | 'outbound'>("inbound")
   const [selectedCall, setSelectedCall] = useState<FormattedCall | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [orgId, setOrgId] = useState<string | null>(null)
   const [calls, setCalls] = useState<Call[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [callStats, setCallStats] = useState<CallStats>({
@@ -121,20 +133,35 @@ export default function Dashboard() {
         return
       }
       setUser(user)
-      await fetchData(user.id)
+      // Resolve organization membership
+      const { data: membershipRows } = await supabase
+        .from('organization_members')
+        .select('organization_id, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+
+      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+      if (!membership) {
+        // No organization; redirect to settings to create/join an organization
+        router.push('/settings')
+        return
+      }
+      setOrgId(membership.organization_id)
+      await fetchData(membership.organization_id)
       setLoading(false)
     }
 
     checkAuth()
   }, [router, supabase])
 
-  const fetchData = async (userId: string) => {
+  const fetchData = async (orgId: string) => {
     try {
       // Fetch calls with real-time subscription
       const { data: callsData, error: callsError } = await supabase
         .from("calls")
         .select("*")
-        .eq("user_id", userId)
+        .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
         .limit(10)
 
@@ -149,10 +176,10 @@ export default function Dashboard() {
       const callsSubscription: RealtimeChannel = supabase
         .channel('calls-changes')
         .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'calls', filter: `user_id=eq.${userId}` },
+          { event: '*', schema: 'public', table: 'calls', filter: `organization_id=eq.${orgId}` },
           (payload) => {
             console.log('Calls change received!', payload)
-            fetchData(userId)
+            fetchData(orgId)
           }
         )
         .subscribe()
@@ -161,7 +188,7 @@ export default function Dashboard() {
       const { data: campaignsData, error: campaignsError } = await supabase
         .from("campaigns")
         .select("*")
-        .eq("user_id", userId)
+        .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
 
       if (campaignsError) {
@@ -174,7 +201,7 @@ export default function Dashboard() {
       const { data: callHistoryData, error: callHistoryError } = await supabase
         .from("call_history")
         .select("*")
-        .eq("user_id", userId)
+        .eq("organization_id", orgId)
         
       if (callHistoryError) {
         console.error("Error fetching call history:", callHistoryError)

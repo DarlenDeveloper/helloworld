@@ -8,12 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { createClient } from "@/lib/supabase/client"
-import { AgentPerformanceChart } from "@/components/agent-performance-chart"
 
 export default function CallHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedCampaign, setSelectedCampaign] = useState("all")
-  const [campaignOptions, setCampaignOptions] = useState<string[]>(["all"])
+  const [campaignOptions, setCampaignOptions] = useState<string[]>(["all"]) 
   const [selectedFilter, setSelectedFilter] = useState("all")
   const [dateRange, setDateRange] = useState<string>("Last 7 days")
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
@@ -21,10 +20,10 @@ export default function CallHistoryPage() {
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   const supabase = createClient()
-  const [userId, setUserId] = useState<string | null>(null)
+  const [orgId, setOrgId] = useState<string | null>(null)
 
   useEffect(() => {
-    const fetchUserAndCalls = async () => {
+    const init = async () => {
       const {
         data: { user },
         error: userError,
@@ -35,33 +34,64 @@ export default function CallHistoryPage() {
         return
       }
 
-      setUserId(user.id)
+      // Resolve organization
+      const { data: membershipRows, error: memErr } = await supabase
+        .from("organization_members")
+        .select("organization_id, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true })
+        .limit(1)
 
-      // fetch from call_history and include campaign name
+      if (memErr) {
+        setFetchError("Failed to resolve organization")
+        return
+      }
+      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+      if (!membership) {
+        setFetchError("No organization found for user")
+        return
+      }
+
+      const org = membership.organization_id
+      setOrgId(org)
+
+      await fetchCallsAndCampaigns(org)
+
+      // Real-time subscription scoped by organization_id
+      const subscription = supabase
+        .channel("org:call_history")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "call_history", filter: `organization_id=eq.${org}` },
+          () => {
+            fetchCallsAndCampaigns(org)
+          }
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(subscription)
+      }
+    }
+
+    init()
+  }, [supabase])
+
+  const fetchCallsAndCampaigns = async (org: string) => {
+    try {
+      // Fetch call history for org
       const { data, error } = await supabase
         .from("call_history")
         .select("*, campaigns(name)")
-        .eq("user_id", user.id)
+        .eq("organization_id", org)
         .order("call_date", { ascending: false })
         .limit(200)
-
-      // load campaign names from campaigns table for filter options
-      const { data: camps, error: campsErr } = await supabase
-        .from("campaigns")
-        .select("name")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-
-      if (!campsErr) {
-        const names = Array.from(new Set(["all", ...((camps || []).map((c: any) => c.name).filter(Boolean))]))
-        setCampaignOptions(names)
-      }
 
       if (error) {
         console.error("Error fetching call history:", JSON.stringify(error, null, 2))
         setFetchError("Failed to fetch call history. Please try again later.")
       } else {
-        // Format calls from call_history
+        // Format calls
         const formattedCalls = (data || []).map((call: any) => {
           const mappedStatus =
             call.status === "completed"
@@ -97,27 +127,23 @@ export default function CallHistoryPage() {
         setCallHistory(formattedCalls)
         setFetchError(null)
       }
+
+      // Load campaign names for filter options
+      const { data: camps, error: campsErr } = await supabase
+        .from("campaigns")
+        .select("name")
+        .eq("organization_id", org)
+        .order("created_at", { ascending: false })
+
+      if (!campsErr) {
+        const names = Array.from(new Set(["all", ...((camps || []).map((c: any) => c.name).filter(Boolean))]))
+        setCampaignOptions(names)
+      }
+    } catch (e) {
+      console.error(e)
+      setFetchError("Unexpected error occurred.")
     }
-
-    fetchUserAndCalls()
-
-    // Set up real-time subscription to call_history table
-    const subscription = supabase
-      .channel("public:call_history")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "call_history" },
-        () => {
-          // refetch on any change
-          fetchUserAndCalls()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(subscription)
-    }
-  }, [supabase])
+  }
 
   // Filter data based on current filters
   const filteredData = callHistory.filter((call) => {
@@ -161,8 +187,12 @@ export default function CallHistoryPage() {
         return "bg-green-100 text-green-800"
       case "Not Resolved":
         return "bg-red-100 text-red-800"
-      case "In Progress":
+      case "No Response":
+        return "bg-gray-100 text-gray-800"
+      case "Busy":
         return "bg-yellow-100 text-yellow-800"
+      case "Voicemail":
+        return "bg-blue-100 text-blue-800"
       default:
         return "bg-gray-100 text-gray-800"
     }

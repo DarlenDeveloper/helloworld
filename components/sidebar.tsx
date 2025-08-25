@@ -2,14 +2,29 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText } from "lucide-react"
+import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, ChevronsLeft, ChevronsRight } from "lucide-react"
 
 export function Sidebar() {
   const pathname = usePathname()
   const [isExpanded, setIsExpanded] = useState(false)
+
+  // Restore persisted state
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("sidebarExpanded")
+      if (saved !== null) setIsExpanded(saved === "true")
+    } catch {}
+  }, [])
+
+  // Persist on change
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebarExpanded", String(isExpanded))
+    } catch {}
+  }, [isExpanded])
 
   const menuItems = [
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
@@ -37,6 +52,25 @@ export function Sidebar() {
       onClick={handleSidebarClick}
     >
       <div className="flex flex-col space-y-6">
+        {/* Minimizer / Expander */}
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            aria-label={isExpanded ? "Collapse sidebar" : "Expand sidebar"}
+            title={isExpanded ? "Collapse" : "Expand"}
+            onClick={(e) => {
+              e.stopPropagation()
+              setIsExpanded(!isExpanded)
+            }}
+            className="p-2 rounded-md text-muted-foreground hover:bg-muted"
+          >
+            {isExpanded ? (
+              <ChevronsLeft className="h-5 w-5" />
+            ) : (
+              <ChevronsRight className="h-5 w-5" />
+            )}
+          </button>
+        </div>
         
         <nav className="flex flex-col space-y-2">
           {menuItems.map((item) => (

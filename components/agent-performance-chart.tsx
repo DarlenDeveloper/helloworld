@@ -21,8 +21,18 @@ export function AgentPerformanceChart() {
     const fetchCallData = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        
         if (!user) return
+
+        // Resolve organization
+        const { data: membershipRows } = await supabase
+          .from('organization_members')
+          .select('organization_id, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true })
+          .limit(1)
+        const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+        if (!membership) return
+        const orgId = membership.organization_id
         
         // Get current date info for creating weekly data
         const today = new Date()
@@ -33,11 +43,11 @@ export function AgentPerformanceChart() {
         const startDate = new Date(today)
         startDate.setDate(today.getDate() - dayOfWeek - 1) // Go back to last Saturday
         
-        // Fetch call history data
+        // Fetch call history data for organization
         const { data: callHistoryData, error } = await supabase
           .from("call_history")
           .select("*")
-          .eq("user_id", user.id)
+          .eq("organization_id", orgId)
           .gte("call_date", startDate.toISOString())
           .order("call_date", { ascending: true })
         
@@ -45,9 +55,6 @@ export function AgentPerformanceChart() {
           console.error("Error fetching call history:", error)
           return
         }
-
-        console.log("Fetched call history data:", callHistoryData)
-        console.log("Start date for filtering:", startDate.toISOString())
 
         // Group calls by day
         const dailyData: Record<string, { count: number, completed: number }> = {}
@@ -95,18 +102,34 @@ export function AgentPerformanceChart() {
     fetchCallData()
     
     // Set up subscription for real-time updates
-    const callsSubscription = supabase
-      .channel('call-history-changes')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'call_history' },
-        () => {
-          fetchCallData() // Refetch data when changes occur
-        }
-      )
-      .subscribe()
+    // Set up subscription for real-time updates scoped by organization
+    let orgScopedSub: ReturnType<typeof supabase.channel> | null = null
+    const setupSub = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data: membershipRows } = await supabase
+        .from('organization_members')
+        .select('organization_id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+      if (!membership) return
+      const orgId = membership.organization_id
+
+      orgScopedSub = supabase
+        .channel('call-history-changes')
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'call_history', filter: `organization_id=eq.${orgId}` },
+          () => fetchCallData()
+        )
+        .subscribe()
+    }
+
+    setupSub()
       
     return () => {
-      supabase.removeChannel(callsSubscription)
+      if (orgScopedSub) supabase.removeChannel(orgScopedSub)
     }
   }, [supabase])
 

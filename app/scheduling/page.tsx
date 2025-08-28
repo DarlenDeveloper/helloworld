@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users, FolderOpen, Clock } from "lucide-react"
+import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users } from "lucide-react"
 import { format } from "date-fns"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -16,7 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 
-// DB types (subset)
+// DB types (subset) aligned with simple schema
 interface DbContactBatch {
   id: string
   user_id: string
@@ -30,12 +30,10 @@ interface DbContactBatch {
 interface DbContact {
   id: string
   user_id: string
-  first_name: string
-  last_name: string
+  name: string | null
   email: string | null
   phone: string | null
-  company: string | null
-  status: "active" | "inactive" | "blocked"
+  notes: string | null
 }
 
 interface DbCampaign {
@@ -43,44 +41,12 @@ interface DbCampaign {
   user_id: string
   name: string
   description: string | null
-  status: "draft" | "active" | "paused" | "completed" | "cancelled"
-  start_date: string | null
-  end_date: string | null
-  contact_count: number
-  calls_made: number
-  success_rate: number
+  status: "draft" | "active" | "paused" | "completed"
+  target_contacts: number | null
+  completed_calls: number | null
+  success_rate: number | null
   created_at: string
   updated_at: string
-}
-
-function getContactBadgeColor(status: string) {
-  switch (status) {
-    case "active":
-      return "bg-blue-100 text-blue-800"
-    case "inactive":
-      return "bg-gray-100 text-gray-800"
-    case "blocked":
-      return "bg-red-100 text-red-800"
-    default:
-      return "bg-gray-100 text-gray-800"
-  }
-}
-
-function getCampaignStatusColor(status: string) {
-  switch (status) {
-    case "draft":
-      return "bg-blue-100 text-blue-800"
-    case "active":
-      return "bg-green-100 text-green-800"
-    case "completed":
-      return "bg-gray-100 text-gray-800"
-    case "paused":
-      return "bg-yellow-100 text-yellow-800"
-    case "cancelled":
-      return "bg-red-100 text-red-800"
-    default:
-      return "bg-gray-100 text-gray-800"
-  }
 }
 
 export default function SchedulingPage() {
@@ -99,13 +65,20 @@ export default function SchedulingPage() {
 
   const [campaignForm, setCampaignForm] = useState({
     name: "",
-    scheduledDate: "",
-    startTime: "09:00",
-    endTime: "17:00",
     concurrentCalls: 3,
     prompt: "",
     selectedBatches: [] as string[],
   })
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
+
+  // Manual add dialog state
+  const [isAddContactOpen, setIsAddContactOpen] = useState(false)
+  const [manualContact, setManualContact] = useState<{ name: string; phone: string; email: string; notes: string }>(
+    { name: "", phone: "", email: "", notes: "" }
+  )
 
   // Derived map for quick lookups
   const batchMap = useMemo(() => {
@@ -120,7 +93,6 @@ export default function SchedulingPage() {
         const { data: { user }, error } = await supabase.auth.getUser()
         if (error) throw error
         if (!user) {
-          // rely on middleware to redirect, but just in case
           router.push("/auth")
           return
         }
@@ -152,7 +124,7 @@ export default function SchedulingPage() {
   const fetchBatchContacts = async (batchId: string) => {
     if (!user) return
 
-    // First fetch the contact IDs from the junction table
+    // Fetch the contact IDs from the junction table
     const { data: linkRows, error: linkErr } = await supabase
       .from("batch_contacts")
       .select("contact_id")
@@ -164,7 +136,7 @@ export default function SchedulingPage() {
       return
     }
 
-    const ids = (linkRows || []).map((r) => r.contact_id)
+    const ids = (linkRows || []).map((r: any) => r.contact_id)
     if (ids.length === 0) {
       setSelectedBatchContacts([])
       return
@@ -172,7 +144,7 @@ export default function SchedulingPage() {
 
     const { data: contacts, error: contactsErr } = await supabase
       .from("contacts")
-      .select("id, user_id, first_name, last_name, email, phone, company, status")
+      .select("id, user_id, name, email, phone, notes")
       .in("id", ids)
       .eq("user_id", user.id)
 
@@ -182,7 +154,7 @@ export default function SchedulingPage() {
       return
     }
 
-    setSelectedBatchContacts(contacts || [])
+    setSelectedBatchContacts((contacts || []) as DbContact[])
   }
 
   const fetchCampaigns = async (userId: string) => {
@@ -196,7 +168,7 @@ export default function SchedulingPage() {
       console.error("Error fetching campaigns:", error)
       return
     }
-    setCampaigns(data || [])
+    setCampaigns(data as DbCampaign[] || [])
   }
 
   const handleCreateBatch = async () => {
@@ -272,14 +244,8 @@ export default function SchedulingPage() {
   const handleCreateCampaign = async () => {
     if (!user) return
 
-    // Validation
     if (!campaignForm.name.trim()) {
       alert("Campaign name is required")
-      return
-    }
-
-    if (!campaignForm.scheduledDate) {
-      alert("Scheduled date is required")
       return
     }
 
@@ -296,15 +262,8 @@ export default function SchedulingPage() {
     setIsCreatingCampaign(true)
 
     try {
-      // Compute contact_count by summing selected batches' contact_count
       const totalContacts = campaignForm.selectedBatches.reduce((sum, id) => sum + (batchMap.get(id)?.contact_count || 0), 0)
 
-      // Build start/end dates
-      const dateOnly = campaignForm.scheduledDate // yyyy-MM-dd
-      const start = new Date(`${dateOnly}T${campaignForm.startTime}:00`)
-      const end = new Date(`${dateOnly}T${campaignForm.endTime}:00`)
-
-      // Store prompt and concurrentCalls in description for now
       const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
 
       const { data: newCampaign, error } = await supabase
@@ -314,9 +273,7 @@ export default function SchedulingPage() {
           name: campaignForm.name.trim(),
           description,
           status: "draft",
-          start_date: start.toISOString(),
-          end_date: end.toISOString(),
-          contact_count: totalContacts,
+          target_contacts: totalContacts,
         })
         .select("*")
         .single()
@@ -327,29 +284,16 @@ export default function SchedulingPage() {
         return
       }
 
-      // Link batches to the campaign
       if (campaignForm.selectedBatches.length > 0) {
         const rows = campaignForm.selectedBatches.map((batchId) => ({ campaign_id: newCampaign.id, batch_id: batchId }))
         const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
         if (linkErr) {
           console.error("Failed to link campaign batches:", linkErr)
-          // Not fatal; continue
         }
       }
 
-      // Update UI
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-
-      // Reset form and close dialog
-      setCampaignForm({
-        name: "",
-        scheduledDate: "",
-        startTime: "09:00",
-        endTime: "17:00",
-        concurrentCalls: 3,
-        prompt: "",
-        selectedBatches: [],
-      })
+      setCampaignForm({ name: "", concurrentCalls: 3, prompt: "", selectedBatches: [] })
       setIsCreateCampaignOpen(false)
     } catch (err) {
       console.error("Error creating campaign:", err)
@@ -365,6 +309,154 @@ export default function SchedulingPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBatch])
+
+  // CSV import support
+  const onClickImportCSV = () => fileInputRef.current?.click()
+
+  const parseCSV = (text: string): { phone: string; notes: string }[] => {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (lines.length === 0) return []
+
+    // Detect header
+    const hasHeader = /(^|,)\s*contact\s*(,|$)/i.test(lines[0])
+    const rows = hasHeader ? lines.slice(1) : lines
+
+    const out: { phone: string; notes: string }[] = []
+    for (const line of rows) {
+      const parts = line.split(",")
+      const phone = (parts[0] || "").trim()
+      const notes = (parts[1] || "").trim()
+      if (!phone) continue
+      // light validation: start with + and at least 8 digits overall
+      if (!/^\+?[0-9]{8,}$/.test(phone.replace(/\s+/g, ""))) continue
+      out.push({ phone, notes })
+    }
+    return out
+  }
+
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const res: T[][] = []
+    for (let i = 0; i < arr.length; i += size) res.push(arr.slice(i, i + size))
+    return res
+  }
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user || !selectedBatch) return
+    const file = e.target.files?.[0]
+    e.target.value = "" // reset input value for future imports
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const parsed = parseCSV(text)
+      const uniqueByPhone = Array.from(new Map(parsed.map((r) => [r.phone, r])).values())
+      if (uniqueByPhone.length === 0) {
+        alert("No valid contacts found in CSV.")
+        return
+      }
+
+      setImporting(true)
+      setImportProgress({ processed: 0, total: uniqueByPhone.length })
+
+      const CHUNK_SIZE = 500
+      const chunks = chunk(uniqueByPhone, CHUNK_SIZE)
+      let totalInserted = 0
+
+      for (let i = 0; i < chunks.length; i++) {
+        const c = chunks[i]
+        // Insert contacts
+        const contactRows = c.map((r) => ({ user_id: user.id, name: null, email: null, phone: r.phone, notes: r.notes || null }))
+        const { data: inserted, error: insErr } = await supabase
+          .from("contacts")
+          .insert(contactRows)
+          .select("id")
+
+        if (insErr) {
+          console.error("Failed inserting contacts chunk:", insErr)
+          alert("Failed to import some contacts. See console for details.")
+          break
+        }
+
+        const linkRows = (inserted || []).map((row: any) => ({ batch_id: selectedBatch, contact_id: row.id }))
+        if (linkRows.length > 0) {
+          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
+          if (linkErr) {
+            console.error("Failed linking batch contacts:", linkErr)
+            alert("Failed to link some contacts to batch. See console for details.")
+            break
+          }
+        }
+
+        totalInserted += contactRows.length
+        setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
+      }
+
+      // Update batch contact_count in DB and in memory
+      if (totalInserted > 0) {
+        await supabase
+          .from("contact_batches")
+          .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
+          .eq("id", selectedBatch)
+
+        // Refresh batch in memory
+        setContactBatches((prev) => prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + totalInserted } : b)))
+        await fetchBatchContacts(selectedBatch)
+      }
+    } catch (err) {
+      console.error("Failed to import CSV:", err)
+      alert("Failed to import CSV.")
+    } finally {
+      setImporting(false)
+      setImportProgress(null)
+    }
+  }
+
+  const handleAddContact = async () => {
+    if (!user || !selectedBatch) return
+    const phone = manualContact.phone.trim()
+    if (!/^\+?[0-9]{8,}$/.test(phone.replace(/\s+/g, ""))) {
+      alert("Enter a valid phone number (start with + and at least 8 digits)")
+      return
+    }
+
+    try {
+      const { data: inserted, error } = await supabase
+        .from("contacts")
+        .insert({
+          user_id: user.id,
+          name: manualContact.name.trim() || null,
+          email: manualContact.email.trim() || null,
+          phone,
+          notes: manualContact.notes.trim() || null,
+        })
+        .select("id")
+        .single()
+
+      if (error || !inserted) {
+        console.error("Failed to add contact:", error)
+        alert("Failed to add contact")
+        return
+      }
+
+      const { error: linkErr } = await supabase
+        .from("batch_contacts")
+        .insert({ batch_id: selectedBatch, contact_id: inserted.id })
+      if (linkErr) {
+        console.error("Failed linking contact to batch:", linkErr)
+        alert("Failed to link contact to batch")
+        return
+      }
+
+      // Update counts/UI
+      setContactBatches((prev) => prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + 1 } : b)))
+      await fetchBatchContacts(selectedBatch)
+      setIsAddContactOpen(false)
+      setManualContact({ name: "", phone: "", email: "", notes: "" })
+    } catch (e) {
+      console.error("Error adding contact:", e)
+      alert("Error adding contact")
+    }
+  }
 
   if (loading) {
     return (
@@ -390,9 +482,10 @@ export default function SchedulingPage() {
               <Plus className="h-4 w-4 mr-2" />
               New Batch
             </Button>
-            <Button variant="outline" className="border-gray-300 bg-transparent" disabled>
+            <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
+            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={onClickImportCSV} disabled={!selectedBatch || importing}>
               <Upload className="h-4 w-4 mr-2" />
-              Import CSV
+              {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
             </Button>
             <Dialog open={isCreateCampaignOpen} onOpenChange={setIsCreateCampaignOpen}>
               <DialogTrigger asChild>
@@ -409,54 +502,13 @@ export default function SchedulingPage() {
                   {/* Campaign Name */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-name">Campaign Name *</Label>
-                    <Input
-                      id="campaign-name"
-                      placeholder="Enter campaign name"
-                      value={campaignForm.name}
-                      onChange={(e) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))}
-                    />
-                  </div>
-
-                  {/* Scheduling */}
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="scheduled-date">Scheduled Date *</Label>
-                      <Input
-                        id="scheduled-date"
-                        type="date"
-                        value={campaignForm.scheduledDate}
-                        onChange={(e) => setCampaignForm((prev) => ({ ...prev, scheduledDate: e.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="start-time">Start Time</Label>
-                      <Input
-                        id="start-time"
-                        type="time"
-                        value={campaignForm.startTime}
-                        onChange={(e) => setCampaignForm((prev) => ({ ...prev, startTime: e.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="end-time">End Time</Label>
-                      <Input
-                        id="end-time"
-                        type="time"
-                        value={campaignForm.endTime}
-                        onChange={(e) => setCampaignForm((prev) => ({ ...prev, endTime: e.target.value }))}
-                      />
-                    </div>
+                    <Input id="campaign-name" placeholder="Enter campaign name" value={campaignForm.name} onChange={(e) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
                   </div>
 
                   {/* Concurrent Calls */}
                   <div className="space-y-2">
                     <Label htmlFor="concurrent-calls">Concurrent Calls</Label>
-                    <Select
-                      value={campaignForm.concurrentCalls.toString()}
-                      onValueChange={(value) =>
-                        setCampaignForm((prev) => ({ ...prev, concurrentCalls: Number.parseInt(value) }))
-                      }
-                    >
+                    <Select value={campaignForm.concurrentCalls.toString()} onValueChange={(value) => setCampaignForm((prev) => ({ ...prev, concurrentCalls: Number.parseInt(value) }))}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -479,11 +531,7 @@ export default function SchedulingPage() {
                       )}
                       {contactBatches.map((batch) => (
                         <div key={batch.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`batch-${batch.id}`}
-                            checked={campaignForm.selectedBatches.includes(batch.id)}
-                            onCheckedChange={(checked) => handleBatchSelection(batch.id, checked as boolean)}
-                          />
+                          <Checkbox id={`batch-${batch.id}`} checked={campaignForm.selectedBatches.includes(batch.id)} onCheckedChange={(checked) => handleBatchSelection(batch.id, checked as boolean)} />
                           <Label htmlFor={`batch-${batch.id}`} className="flex-1 cursor-pointer">
                             {batch.name} ({batch.contact_count} contacts)
                           </Label>
@@ -495,22 +543,12 @@ export default function SchedulingPage() {
                   {/* Campaign Prompt */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-prompt">Campaign Prompt *</Label>
-                    <Textarea
-                      id="campaign-prompt"
-                      placeholder="Enter the script or prompt for this campaign..."
-                      rows={4}
-                      value={campaignForm.prompt}
-                      onChange={(e) => setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))}
-                    />
+                    <Textarea id="campaign-prompt" placeholder="Enter the script or prompt for this campaign..." rows={4} value={campaignForm.prompt} onChange={(e) => setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))} />
                   </div>
 
                   {/* Action Buttons */}
                   <div className="flex justify-end gap-3">
-                    <Button
-                      variant="outline"
-                      onClick={() => setIsCreateCampaignOpen(false)}
-                      disabled={isCreatingCampaign}
-                    >
+                    <Button variant="outline" onClick={() => setIsCreateCampaignOpen(false)} disabled={isCreatingCampaign}>
                       Cancel
                     </Button>
                     <Button onClick={handleCreateCampaign} disabled={isCreatingCampaign} className="bg-teal-500 hover:bg-teal-600">
@@ -534,14 +572,49 @@ export default function SchedulingPage() {
                       <Button variant="ghost" size="sm" onClick={() => setSelectedBatch(null)}>
                         ← Back
                       </Button>
-                      <CardTitle className="text-black">
-                        {batchMap.get(selectedBatch)?.name || "Contacts"}
-                      </CardTitle>
+                      <CardTitle className="text-black">{batchMap.get(selectedBatch)?.name || "Contacts"}</CardTitle>
                     </div>
-                    <Button variant="outline" size="sm" disabled>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Contact
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={onClickImportCSV} disabled={importing}>
+                        <Upload className="h-4 w-4 mr-2" />
+                        {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
+                      </Button>
+                      <Dialog open={isAddContactOpen} onOpenChange={setIsAddContactOpen}>
+                        <DialogTrigger asChild>
+                          <Button variant="outline" size="sm">
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Contact
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>Add Contact</DialogTitle>
+                          </DialogHeader>
+                          <div className="space-y-3">
+                            <div>
+                              <Label htmlFor="add-name">Name (optional)</Label>
+                              <Input id="add-name" value={manualContact.name} onChange={(e) => setManualContact((p) => ({ ...p, name: e.target.value }))} />
+                            </div>
+                            <div>
+                              <Label htmlFor="add-phone">Phone *</Label>
+                              <Input id="add-phone" value={manualContact.phone} onChange={(e) => setManualContact((p) => ({ ...p, phone: e.target.value }))} placeholder="e.g., +256778825312" />
+                            </div>
+                            <div>
+                              <Label htmlFor="add-email">Email (optional)</Label>
+                              <Input id="add-email" type="email" value={manualContact.email} onChange={(e) => setManualContact((p) => ({ ...p, email: e.target.value }))} />
+                            </div>
+                            <div>
+                              <Label htmlFor="add-notes">Notes (optional)</Label>
+                              <Textarea id="add-notes" rows={3} value={manualContact.notes} onChange={(e) => setManualContact((p) => ({ ...p, notes: e.target.value }))} />
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>Cancel</Button>
+                              <Button onClick={handleAddContact} className="bg-teal-500 hover:bg-teal-600">Add</Button>
+                            </div>
+                          </div>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -550,19 +623,13 @@ export default function SchedulingPage() {
                       <div className="text-sm text-gray-500">No contacts in this batch yet.</div>
                     )}
                     {selectedBatchContacts.map((contact) => (
-                      <div
-                        key={contact.id}
-                        className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
-                      >
+                      <div key={contact.id} className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium text-black">
-                              {contact.first_name} {contact.last_name}
-                            </span>
-                            <Badge className={getContactBadgeColor(contact.status)}>{contact.status}</Badge>
+                            <span className="font-medium text-black">{contact.name || contact.phone || "Unknown"}</span>
                           </div>
                           <div className="text-sm text-gray-600">
-                            {contact.phone || "No phone"} • {contact.email || "No email"} • {contact.company || "No company"}
+                            {(contact.phone || "No phone")} • {(contact.email || "No email")} • {(contact.notes || "No notes")}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -589,41 +656,17 @@ export default function SchedulingPage() {
                       <div className="text-sm text-gray-500">No contact batches yet. Create one to get started.</div>
                     )}
                     {contactBatches.map((batch) => (
-                      <div
-                        key={batch.id}
-                        className="flex items-center gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
-                        onClick={() => {
-                          setSelectedBatch(batch.id)
-                        }}
-                      >
-                        <FolderOpen className="h-5 w-5 text-teal-600" />
+                      <div key={batch.id} className="flex items-center gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedBatch(batch.id) }}>
+                        <Users className="h-5 w-5 text-teal-600" />
                         <div className="flex-1">
                           <div className="font-medium text-black">{batch.name}</div>
-                          <div className="text-sm text-gray-600">
-                            {batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}
-                          </div>
+                          <div className="text-sm text-gray-600">{batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}</div>
                         </div>
                         <div className="flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              const newName = prompt("Enter new batch name:", batch.name)
-                              if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim())
-                            }}
-                          >
+                          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); const newName = prompt("Enter new batch name:", batch.name); if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim()) }}>
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-600"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleDeleteBatch(batch.id)
-                            }}
-                          >
+                          <Button variant="ghost" size="sm" className="text-red-600" onClick={(e) => { e.stopPropagation(); handleDeleteBatch(batch.id) }}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -650,44 +693,11 @@ export default function SchedulingPage() {
                     <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex items-start justify-between mb-2">
                         <h3 className="font-medium text-black">{campaign.name}</h3>
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" disabled>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-600 hover:text-red-700" disabled>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        <Badge className="bg-blue-100 text-blue-800 capitalize">{campaign.status}</Badge>
                       </div>
                       <div className="space-y-2 text-sm text-gray-600">
-                        <div className="flex items-center gap-2">
-                          <Users className="h-4 w-4" />
-                          {campaign.contact_count} contacts
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <CalendarIcon className="h-4 w-4" />
-                          {campaign.start_date ? format(new Date(campaign.start_date), "MMM d, yyyy") : "N/A"}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4" />
-                          {campaign.start_date && campaign.end_date
-                            ? `${format(new Date(campaign.start_date), "HH:mm")} - ${format(
-                                new Date(campaign.end_date),
-                                "HH:mm",
-                              )}`
-                            : "N/A"}
-                        </div>
-                        <Badge className={getCampaignStatusColor(campaign.status)}>{campaign.status}</Badge>
-                        {campaign.status === "paused" && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full mt-2 border-yellow-500 text-yellow-600 bg-transparent"
-                            disabled
-                          >
-                            Resume Campaign
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>
+                        <div className="flex items-center gap-2"><CalendarIcon className="h-4 w-4" />Created {format(new Date(campaign.created_at), "MMM d, yyyy")}</div>
                       </div>
                     </div>
                   ))}

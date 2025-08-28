@@ -27,7 +27,7 @@ export default function SignUpSuccessPage() {
               Didn't receive the email? Check your spam folder or contact support.
             </p>
             <Button asChild className="w-full">
-              <Link href="/login">Return to Login</Link>
+              <Link href="/auth">Return to Login</Link>
             </Button>
           </CardContent>
         </Card>

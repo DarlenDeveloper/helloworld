@@ -208,7 +208,3 @@ CREATE INDEX IF NOT EXISTS idx_contact_batches_created_at ON public.contact_batc
 CREATE INDEX IF NOT EXISTS idx_call_history_date ON public.call_history(call_date DESC);
 CREATE INDEX IF NOT EXISTS idx_kb_created_at ON public.knowledge_base_articles(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_login_logs_created_at ON public.user_login_logs(created_at DESC);
-
-
-https://eumrsrxeebqsquccnjmr.supabase.co
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1bXJzcnhlZWJxc3F1Y2Nuam1yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzODczNTQsImV4cCI6MjA3MTk2MzM1NH0.67a2LuaiWrtCK3ETeDF5903U2sCbV2jVvM6xntxi8c0

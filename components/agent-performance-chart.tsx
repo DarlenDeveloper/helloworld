@@ -1,139 +1,111 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Bar, XAxis, YAxis, ResponsiveContainer, Line, ComposedChart } from "recharts"
+import { useEffect, useMemo, useState } from "react"
+import { Bar, XAxis, YAxis, ResponsiveContainer, Line, ComposedChart, Tooltip } from "recharts"
 import { createClient } from "@/lib/supabase/client"
 
-interface DailyCallData {
-  day: string
-  performance: number
+export type CallsPeriod = "weekly" | "monthly"
+
+interface Point {
+  label: string
+  count: number
   line: number
 }
 
-export function AgentPerformanceChart() {
-  const [callData, setCallData] = useState<DailyCallData[]>([])
-  const [averagePerformance, setAveragePerformance] = useState(0)
+export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPeriod }) {
+  const [data, setData] = useState<Point[]>([])
   const [loading, setLoading] = useState(true)
   const supabase = createClient()
 
+  const labels = useMemo(() => {
+    const now = new Date()
+    if (period === "weekly") {
+      // last 7 days (today - 6 .. today)
+      const arr: string[] = []
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now)
+        d.setDate(now.getDate() - i)
+        arr.push(d.toLocaleDateString(undefined, { weekday: "short" }))
+      }
+      return arr
+    } else {
+      // last 12 months (including current)
+      const arr: string[] = []
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now)
+        d.setMonth(now.getMonth() - i)
+        arr.push(d.toLocaleDateString(undefined, { month: "short" }))
+      }
+      return arr
+    }
+  }, [period])
+
   useEffect(() => {
-    // Function to fetch call data and format it for the chart
-    const fetchCallData = async () => {
+    const fetchData = async () => {
+      setLoading(true)
       try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return
+        // Compute start date based on period
+        const now = new Date()
+        let start: Date
+        if (period === "weekly") {
+          start = new Date(now)
+          start.setDate(now.getDate() - 6)
+          start.setHours(0, 0, 0, 0)
+        } else {
+          start = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0)
+        }
 
-        // Resolve organization
-        const { data: membershipRows } = await supabase
-          .from('organization_members')
-          .select('organization_id, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: true })
-          .limit(1)
-        const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-        if (!membership) return
-        const orgId = membership.organization_id
-        
-        // Get current date info for creating weekly data
-        const today = new Date()
-        const dayOfWeek = today.getDay() // 0 = Sunday, 6 = Saturday
-        const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        
-        // Calculate date range for the past week
-        const startDate = new Date(today)
-        startDate.setDate(today.getDate() - dayOfWeek - 1) // Go back to last Saturday
-        
-        // Fetch call history data for organization
-        const { data: callHistoryData, error } = await supabase
+        const { data: rows, error } = await supabase
           .from("call_history")
-          .select("*")
-          .eq("organization_id", orgId)
-          .gte("call_date", startDate.toISOString())
-          .order("call_date", { ascending: true })
-        
-        if (error) {
-          console.error("Error fetching call history:", error)
-          return
-        }
+          .select("call_date")
+          .gte("call_date", start.toISOString())
 
-        // Group calls by day
-        const dailyData: Record<string, { count: number, completed: number }> = {}
-        
-        // Initialize all days of the week with zeros
-        for (let i = 0; i < 7; i++) {
-          const day = weekDays[i]
-          dailyData[day] = { count: 0, completed: 0 }
+        if (error) throw error
+
+        if (period === "weekly") {
+          const buckets = new Array(7).fill(0)
+          ;(rows || []).forEach((r: any) => {
+            const d = new Date(r.call_date)
+            const startDay = new Date(start)
+            const msPerDay = 24 * 3600 * 1000
+            const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+            const offset = Math.floor((dayStart.getTime() - startDay.getTime()) / msPerDay)
+            if (offset >= 0 && offset < 7) buckets[offset] += 1
+          })
+          const points: Point[] = buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
+          setData(points)
+        } else {
+          const buckets = new Array(12).fill(0)
+          ;(rows || []).forEach((r: any) => {
+            const d = new Date(r.call_date)
+            const monthsDiff = (d.getFullYear() - start.getFullYear()) * 12 + (d.getMonth() - start.getMonth())
+            if (monthsDiff >= 0 && monthsDiff < 12) buckets[monthsDiff] += 1
+          })
+          const points: Point[] = buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
+          setData(points)
         }
-        
-        // Fill in actual data
-        callHistoryData?.forEach(call => {
-          const callDate = new Date(call.call_date)
-          const day = weekDays[callDate.getDay()]
-          
-          dailyData[day].count++
-          if (call.status === "completed") {
-            dailyData[day].completed++
-          }
-        })
-        
-        // Calculate performance (% of completed calls)
-        const chartData: DailyCallData[] = Object.entries(dailyData).map(([day, data]) => {
-          const performance = data.count > 0 ? Math.round((data.completed / data.count) * 100) : 0
-          return {
-            day,
-            performance,
-            line: performance // Line follows the same data points
-          }
-        })
-        
-        // Calculate average performance
-        const totalPerformance = chartData.reduce((sum, day) => sum + day.performance, 0)
-        const avgPerf = Math.round(totalPerformance / chartData.length)
-        
-        setCallData(chartData)
-        setAveragePerformance(avgPerf)
-        setLoading(false)
-      } catch (error) {
-        console.error("Error in fetchCallData:", error)
+      } catch (e) {
+        console.error("Failed to fetch calls data:", e)
+        setData([])
+      } finally {
         setLoading(false)
       }
     }
 
-    fetchCallData()
-    
-    // Set up subscription for real-time updates
-    // Set up subscription for real-time updates scoped by organization
-    let orgScopedSub: ReturnType<typeof supabase.channel> | null = null
-    const setupSub = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data: membershipRows } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-      if (!membership) return
-      const orgId = membership.organization_id
+    fetchData()
 
-      orgScopedSub = supabase
-        .channel('call-history-changes')
-        .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'call_history', filter: `organization_id=eq.${orgId}` },
-          () => fetchCallData()
-        )
-        .subscribe()
-    }
+    const channel = supabase
+      .channel("call-history-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "call_history" }, () => {
+        fetchData()
+      })
+      .subscribe()
 
-    setupSub()
-      
     return () => {
-      if (orgScopedSub) supabase.removeChannel(orgScopedSub)
+      supabase.removeChannel(channel)
     }
-  }, [supabase])
+  }, [supabase, period, labels])
 
-  // Show placeholder while loading
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
@@ -144,31 +116,15 @@ export function AgentPerformanceChart() {
 
   return (
     <div className="h-64">
-      <div className="flex justify-between text-sm text-gray-500 mb-4">
-        <span>0 %</span>
-        <span>100 %</span>
-      </div>
-
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={callData}>
-          <XAxis dataKey="day" axisLine={false} tickLine={false} className="text-xs text-gray-500" />
-          <YAxis hide domain={[0, 100]} />
-          <Bar dataKey="performance" fill="#e0e7ff" radius={[4, 4, 4, 4]} />
-          <Line
-            type="monotone"
-            dataKey="line"
-            stroke="#10b981"
-            strokeWidth={2}
-            dot={{ fill: "#10b981", strokeWidth: 2, r: 4 }}
-          />
+        <ComposedChart data={data}>
+          <XAxis dataKey="label" axisLine={false} tickLine={false} className="text-xs text-gray-500" />
+          <YAxis allowDecimals={false} />
+          <Tooltip formatter={(v: any) => [v, "Calls"]} />
+          <Bar dataKey="count" fill="#e0e7ff" radius={[4, 4, 4, 4]} />
+          <Line type="monotone" dataKey="line" stroke="#10b981" strokeWidth={2} dot={{ fill: "#10b981", strokeWidth: 2, r: 3 }} />
         </ComposedChart>
       </ResponsiveContainer>
-
-      <div className="mt-2 text-center">
-        <span className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded">
-          {averagePerformance}%
-        </span>
-      </div>
     </div>
   )
 }

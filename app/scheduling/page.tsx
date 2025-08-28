@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users } from "lucide-react"
+import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users, Play } from "lucide-react"
 import { format } from "date-fns"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -69,6 +69,10 @@ export default function SchedulingPage() {
     prompt: "",
     selectedBatches: [] as string[],
   })
+
+  // start campaign state
+  const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [importing, setImporting] = useState(false)
@@ -292,6 +296,26 @@ export default function SchedulingPage() {
     }
   }
 
+  const startCampaign = async (campaignId: string) => {
+    setStartingCampaignId(campaignId)
+    setStarting(true)
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/start`, {
+        method: "POST",
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || `Failed to start campaign (${res.status})`)
+      }
+      if (user) await fetchCampaigns(user.id)
+    } catch (e: any) {
+      alert(e.message || "Failed to start campaign")
+    } finally {
+      setStarting(false)
+      setStartingCampaignId(null)
+    }
+  }
+
   useEffect(() => {
     if (selectedBatch) {
       fetchBatchContacts(selectedBatch)
@@ -353,7 +377,7 @@ export default function SchedulingPage() {
 
       let allowedRemaining = Math.max(0, 1000 - (batchMap.get(selectedBatch)?.contact_count || 0))
       if (allowedRemaining === 0) {
-        alert("This batch already has 1000 contacts." )
+        alert("This batch already has 1000 contacts.")
         return
       }
 
@@ -697,7 +721,14 @@ export default function SchedulingPage() {
                     <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex items-start justify-between mb-2">
                         <h3 className="font-medium text-black">{campaign.name}</h3>
-                        <Badge className="bg-blue-100 text-blue-800 capitalize">{campaign.status}</Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-blue-100 text-blue-800 capitalize">{campaign.status}</Badge>
+                          {campaign.status !== "active" && (
+                            <Button size="sm" onClick={() => startCampaign(campaign.id)} disabled={starting && startingCampaignId === campaign.id} className="bg-teal-500 hover:bg-teal-600">
+                              <Play className="h-4 w-4 mr-1" /> {starting && startingCampaignId === campaign.id ? "Starting..." : "Start"}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-2 text-sm text-gray-600">
                         <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>

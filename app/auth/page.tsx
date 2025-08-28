@@ -174,15 +174,16 @@ export default function Auth() {
         return
       }
 
-      // Check email is authorized under this org
-      const { data: allowedRows, error: allowErr } = await supabase
-        .from('account_emails')
+      // Check pending invite for this email under the org
+      const { data: inviteRows, error: inviteErr } = await supabase
+        .from('organization_invites')
         .select('id')
         .eq('organization_id', org.id)
         .eq('email', empEmail.trim().toLowerCase())
+        .eq('status', 'pending')
         .limit(1)
-      if (allowErr || !allowedRows || allowedRows.length === 0) {
-        setError("This email is not authorized for the specified organization. Please contact your admin.")
+      if (inviteErr || !inviteRows || inviteRows.length === 0) {
+        setError("You must be invited to join this organization. Please ask an admin to invite your email.")
         setLoading(false)
         return
       }

@@ -20,8 +20,7 @@ interface LoginLog {
   user_agent: string | null
   location: string | null
   device: string | null
-  session_duration: number | null // minutes
-  login_time: string // ISO
+  created_at: string // ISO
 }
 
 export default function LogsPage() {
@@ -64,7 +63,7 @@ export default function LogsPage() {
       .from("user_login_logs")
       .select("*")
       .eq("user_id", userId)
-      .order("login_time", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(500)
 
     if (error) {
@@ -91,7 +90,7 @@ export default function LogsPage() {
 
       const matchesStatus = statusFilter === "all" || log.status === (statusFilter as LoginLog["status"])
 
-      const logTime = new Date(log.login_time)
+      const logTime = new Date(log.created_at)
       const matchesTime = logTime >= startCutoff
 
       return matchesSearch && matchesStatus && matchesTime
@@ -102,12 +101,12 @@ export default function LogsPage() {
   const metrics = useMemo(() => {
     const now = new Date()
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const todayCount = logs.filter((l) => new Date(l.login_time) >= todayStart).length
+    const todayCount = logs.filter((l) => new Date(l.created_at) >= todayStart).length
     const windowLogs = filteredLogs
     const total = windowLogs.length || 1
     const successCount = windowLogs.filter((l) => l.status === "success").length
     const failedLastDay = logs.filter((l) => {
-      const t = new Date(l.login_time)
+      const t = new Date(l.created_at)
       const cutoff = new Date(now)
       cutoff.setDate(now.getDate() - 1)
       return l.status === "failed" && t >= cutoff
@@ -116,7 +115,7 @@ export default function LogsPage() {
     const successRate = Math.round((successCount / total) * 1000) / 10 // one decimal
     // Active sessions is not tracked; approximate with count of success in last 60 minutes
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000)
-    const activeSessions = logs.filter((l) => l.status === "success" && new Date(l.login_time) >= oneHourAgo).length
+    const activeSessions = logs.filter((l) => l.status === "success" && new Date(l.created_at) >= oneHourAgo).length
 
     return { todayCount, successRate, failedLastDay, activeSessions }
   }, [logs, filteredLogs])
@@ -152,15 +151,14 @@ export default function LogsPage() {
 
   const exportCSV = () => {
     const rows = [
-      ["email", "status", "login_time", "ip_address", "location", "device", "session_duration"],
+      ["email", "status", "created_at", "ip_address", "location", "device"],
       ...filteredLogs.map((l) => [
         l.email,
         l.status,
-        new Date(l.login_time).toISOString(),
+        new Date(l.created_at).toISOString(),
         l.ip_address || "",
         l.location || "",
         l.device || "",
-        l.session_duration?.toString() || "",
       ]),
     ]
     const csv = rows.map((r) => r.map((v) => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\n")
@@ -310,7 +308,6 @@ export default function LogsPage() {
                 <TableHead className="text-black font-medium">IP Address</TableHead>
                 <TableHead className="text-black font-medium">Location</TableHead>
                 <TableHead className="text-black font-medium">Device</TableHead>
-                <TableHead className="text-black font-medium">Session</TableHead>
                 <TableHead className="text-black font-medium">Details</TableHead>
               </TableRow>
             </TableHeader>
@@ -329,12 +326,11 @@ export default function LogsPage() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-black font-mono text-sm">
-                    {new Date(log.login_time).toLocaleString()}
+                    {new Date(log.created_at).toLocaleString()}
                   </TableCell>
                   <TableCell className="text-black font-mono">{log.ip_address || "-"}</TableCell>
                   <TableCell className="text-black">{log.location || "-"}</TableCell>
                   <TableCell className="text-black text-sm">{log.device || "-"}</TableCell>
-                  <TableCell className="text-black">{log.session_duration ? `${log.session_duration} min` : "-"}</TableCell>
                   <TableCell>
                     <Dialog>
                       <DialogTrigger asChild>
@@ -373,11 +369,7 @@ export default function LogsPage() {
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="text-sm font-medium text-gray-600">Timestamp:</label>
-                                <p className="font-mono">{new Date(selectedLog.login_time).toLocaleString()}</p>
-                              </div>
-                              <div>
-                                <label className="text-sm font-medium text-gray-600">Session Duration:</label>
-                                <p>{selectedLog.session_duration ? `${selectedLog.session_duration} min` : "-"}</p>
+                                <p className="font-mono">{new Date(selectedLog.created_at).toLocaleString()}</p>
                               </div>
                             </div>
 

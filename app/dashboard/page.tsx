@@ -302,6 +302,18 @@ export default function Dashboard() {
     )
   }
 
+  // Derived totals and percentages for circular charts
+  const inboundTotal = callStats.inbound.resolved + callStats.inbound.notResolved + callStats.inbound.forwarded
+  const outboundTotal = callStats.outbound.followUp + callStats.outbound.notInterested + callStats.outbound.notAnswered
+
+  const inResolvedPct = inboundTotal ? Math.round((callStats.inbound.resolved / inboundTotal) * 100) : 0
+  const inNotResolvedPct = inboundTotal ? Math.round((callStats.inbound.notResolved / inboundTotal) * 100) : 0
+  const inForwardedPct = inboundTotal ? Math.round((callStats.inbound.forwarded / inboundTotal) * 100) : 0
+
+  const outFollowUpPct = outboundTotal ? Math.round((callStats.outbound.followUp / outboundTotal) * 100) : 0
+  const outNotInterestedPct = outboundTotal ? Math.round((callStats.outbound.notInterested / outboundTotal) * 100) : 0
+  const outNotAnsweredPct = outboundTotal ? Math.round((callStats.outbound.notAnswered / outboundTotal) * 100) : 0
+
   // Format call data for display
   const recentCalls: Record<'inbound' | 'outbound', FormattedCall[]> = {
     inbound: calls
@@ -400,35 +412,10 @@ export default function Dashboard() {
             <div className="flex items-center justify-center h-20">
               <div className="relative w-16 h-16">
                 <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#e5e7eb"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#14b8a6"
-                    strokeWidth="2"
-                    strokeDasharray="45, 100"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#f59e0b"
-                    strokeWidth="2"
-                    strokeDasharray="30, 100"
-                    strokeDashoffset="-45"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#ef4444"
-                    strokeWidth="2"
-                    strokeDasharray="25, 100"
-                    strokeDashoffset="-75"
-                  />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e5e7eb" strokeWidth="2" />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#14b8a6" strokeWidth="2" strokeDasharray={`${outFollowUpPct}, 100`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${outNotInterestedPct}, 100`} strokeDashoffset={`-${outFollowUpPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${outNotAnsweredPct}, 100`} strokeDashoffset={`-${outFollowUpPct + outNotInterestedPct}`} />
                 </svg>
               </div>
             </div>
@@ -438,21 +425,21 @@ export default function Dashboard() {
                   <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
                   <span>Follow Up</span>
                 </div>
-                <span>{Math.round((callStats.outbound.followUp / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
+                <span>{outFollowUpPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                   <span>Not Interested</span>
                 </div>
-                <span>{Math.round((callStats.outbound.notInterested / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
+                <span>{outNotInterestedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
                   <span>Not Answered</span>
                 </div>
-                <span>{Math.round((callStats.outbound.notAnswered / (calls.filter((c: Call) => c.call_type === "outbound").length || 1)) * 100)}%</span>
+                <span>{outNotAnsweredPct}%</span>
               </div>
             </div>
           </CardContent>
@@ -477,35 +464,10 @@ export default function Dashboard() {
             <div className="flex items-center justify-center h-20">
               <div className="relative w-16 h-16">
                 <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#e5e7eb"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#10b981"
-                    strokeWidth="2"
-                    strokeDasharray="60, 100"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#ef4444"
-                    strokeWidth="2"
-                    strokeDasharray="25, 100"
-                    strokeDashoffset="-60"
-                  />
-                  <path
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    fill="none"
-                    stroke="#f59e0b"
-                    strokeWidth="2"
-                    strokeDasharray="15, 100"
-                    strokeDashoffset="-85"
-                  />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e5e7eb" strokeWidth="2" />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#10b981" strokeWidth="2" strokeDasharray={`${inResolvedPct}, 100`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${inNotResolvedPct}, 100`} strokeDashoffset={`-${inResolvedPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${inForwardedPct}, 100`} strokeDashoffset={`-${inResolvedPct + inNotResolvedPct}`} />
                 </svg>
               </div>
             </div>
@@ -515,21 +477,21 @@ export default function Dashboard() {
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                   <span>Resolved</span>
                 </div>
-                <span>{Math.round((callStats.inbound.resolved / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
+                <span>{inResolvedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
                   <span>Not Resolved</span>
                 </div>
-                <span>{Math.round((callStats.inbound.notResolved / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
+                <span>{inNotResolvedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                   <span>Forwarded</span>
                 </div>
-                <span>{Math.round((callStats.inbound.forwarded / (calls.filter((c: Call) => c.call_type === "inbound").length || 1)) * 100)}%</span>
+                <span>{inForwardedPct}%</span>
               </div>
             </div>
           </CardContent>

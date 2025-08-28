@@ -123,6 +123,8 @@ export default function Dashboard() {
   const supabase = createClient()
 
   useEffect(() => {
+    let callsSub: RealtimeChannel | null = null
+    let historySub: RealtimeChannel | null = null
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
@@ -131,9 +133,21 @@ export default function Dashboard() {
       }
       setUser(user)
       await fetchData()
+      callsSub = supabase
+        .channel('calls-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, () => { fetchData() })
+        .subscribe()
+      historySub = supabase
+        .channel('call-history-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'call_history' }, () => { fetchData() })
+        .subscribe()
       setLoading(false)
     }
     init()
+    return () => {
+      if (callsSub) supabase.removeChannel(callsSub)
+      if (historySub) supabase.removeChannel(historySub)
+    }
   }, [router, supabase])
 
   const fetchData = async () => {
@@ -149,19 +163,26 @@ export default function Dashboard() {
         console.error("Error fetching calls:", callsError)
       } else {
         setCalls((callsData as Call[]) || [])
-        calculateCallStats((callsData as Call[]) || [])
       }
 
-      // Subscribe to global changes for calls
-      const callsSubscription: RealtimeChannel = supabase
-        .channel('calls-changes')
-        .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'calls' },
-          () => {
-            fetchData()
-          }
-        )
-        .subscribe()
+      // Compute inbound/outbound stats by filtering at DB level
+      const { data: inboundRows, error: inboundErr } = await supabase
+        .from("calls")
+        .select("status")
+        .eq("call_type", "inbound")
+
+      const { data: outboundRows, error: outboundErr } = await supabase
+        .from("calls")
+        .select("status")
+        .eq("call_type", "outbound")
+
+      if (inboundErr || outboundErr) {
+        console.error("Error fetching call stats by type:", inboundErr || outboundErr)
+      } else {
+        const inboundStatuses = (inboundRows || []).map((r: any) => r.status as string)
+        const outboundStatuses = (outboundRows || []).map((r: any) => r.status as string)
+        calculateCallStats(inboundStatuses, outboundStatuses)
+      }
 
       // Fetch campaigns (global, no org filter)
       const { data: campaignsData, error: campaignsError } = await supabase
@@ -201,20 +222,17 @@ export default function Dashboard() {
   }
 
   // Calculate call statistics from calls data
-  const calculateCallStats = (callsData: Call[]) => {
-    const inboundCalls = callsData.filter(call => call.call_type === 'inbound')
-    const outboundCalls = callsData.filter(call => call.call_type === 'outbound')
-    
+  const calculateCallStats = (inboundStatuses: string[], outboundStatuses: string[]) => {
     const stats: CallStats = {
       inbound: {
-        resolved: inboundCalls.filter(call => call.status === 'completed').length,
-        notResolved: inboundCalls.filter(call => call.status === 'missed').length,
-        forwarded: inboundCalls.filter(call => call.status === 'in_progress').length
+        resolved: inboundStatuses.filter(s => s === 'completed').length,
+        notResolved: inboundStatuses.filter(s => s === 'missed').length,
+        forwarded: inboundStatuses.filter(s => s === 'in_progress').length
       },
       outbound: {
-        followUp: outboundCalls.filter(call => call.status === 'completed').length,
-        notInterested: outboundCalls.filter(call => call.status === 'in_progress').length,
-        notAnswered: outboundCalls.filter(call => call.status === 'missed').length
+        followUp: outboundStatuses.filter(s => s === 'completed').length,
+        notInterested: outboundStatuses.filter(s => s === 'in_progress').length,
+        notAnswered: outboundStatuses.filter(s => s === 'missed').length
       }
     }
     setCallStats(stats)
@@ -534,8 +552,7 @@ export default function Dashboard() {
             <div className="text-center">
               <span className="text-3xl font-bold text-black">{callMetrics.avgDuration}</span>
               <p className="text-sm text-gray-500">minutes</p>
-              <div className="mt-2 text-xs text-teal-600">+{callMetrics.avgChangePercent}% from last week</div>
-            </div>
+                          </div>
           </CardContent>
         </Card>
       </div>

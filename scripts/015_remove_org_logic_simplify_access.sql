@@ -1,8 +1,6 @@
--- Remove all organization logic and simplify access for all authenticated users
--- This script drops org-related objects (tables, functions, triggers, policies)
--- and configures permissive RLS so all authenticated users can read/write data.
+-- 0) SAFETY: Wrap many operations with IF EXISTS checks and drop triggers before functions
 
--- A) Drop triggers that reference org functions
+-- A. Drop triggers that reference org functions
 DO $$
 BEGIN
   IF to_regclass('public.profiles') IS NOT NULL THEN
@@ -12,6 +10,7 @@ BEGIN
   END IF;
 
   -- Drop BEFORE INSERT org-setting triggers on domain tables if present
+  PERFORM 1;
   IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_set_org_contacts') THEN
     DROP TRIGGER trg_set_org_contacts ON public.contacts;
   END IF;
@@ -45,7 +44,7 @@ BEGIN
   END IF;
 END $$;
 
--- B) Drop views referencing org tables
+-- B. Drop views referencing org tables
 DO $$
 BEGIN
   IF to_regclass('public.organization_users') IS NOT NULL THEN
@@ -53,12 +52,12 @@ BEGIN
   END IF;
 END $$;
 
--- C) Drop policies that rely on org functions across tables
+-- C. Drop policies that rely on org functions across tables
 DO $$
 DECLARE
   r RECORD;
 BEGIN
-  -- Drop org_*_all policies created by _apply_org_member_policies (script 008)
+  -- Drop org_*_all policies created by _apply_org_member_policies in script 008
   FOR r IN
     SELECT schemaname, tablename, policyname
     FROM pg_policies
@@ -103,48 +102,48 @@ BEGIN
   -- Drop profiles org-read policy from 012 if exists
   IF EXISTS (
     SELECT 1 FROM pg_policies
-    WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_select_same_org'
+    WHERE schemaname='public' AND tablename='profiles' AND policyname='profiles_select_same_org'
   ) THEN
     DROP POLICY profiles_select_same_org ON public.profiles;
   END IF;
 END $$;
 
--- D) Drop functions (ensure triggers were dropped above)
+-- D. Drop functions (order matters: triggers dropped first)
 DO $$
 BEGIN
   -- RPCs
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'create_organization') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='create_organization') THEN
     DROP FUNCTION public.create_organization(TEXT);
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'invite_org_email') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='invite_org_email') THEN
     DROP FUNCTION public.invite_org_email(UUID, TEXT, public.org_role, UUID);
   END IF;
 
   -- Utilities
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'ensure_org_for_new_user') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='ensure_org_for_new_user') THEN
     DROP FUNCTION public.ensure_org_for_new_user();
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'set_org_on_insert') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='set_org_on_insert') THEN
     DROP FUNCTION public.set_org_on_insert();
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'is_org_member') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='is_org_member') THEN
     DROP FUNCTION public.is_org_member(UUID, public.org_role);
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'get_user_org_id') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='get_user_org_id') THEN
     DROP FUNCTION public.get_user_org_id(UUID);
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = '_apply_org_member_policies') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='_apply_org_member_policies') THEN
     DROP FUNCTION public._apply_org_member_policies(regclass);
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'set_org_username') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='set_org_username') THEN
     DROP FUNCTION public.set_org_username();
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'slugify') THEN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname='slugify') THEN
     DROP FUNCTION public.slugify(TEXT);
   END IF;
 END $$;
 
--- E) Drop org-related tables
+-- E. Drop org-related tables (drop invites first due to references)
 DO $$
 BEGIN
   IF to_regclass('public.organization_invites') IS NOT NULL THEN
@@ -161,24 +160,25 @@ BEGIN
   END IF;
 END $$;
 
--- F) Drop enum types if unused
+-- F. Drop enum types if unused
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'invite_status') THEN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname='invite_status') THEN
     DROP TYPE public.invite_status;
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'org_role') THEN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname='org_role') THEN
     DROP TYPE public.org_role;
   END IF;
 END $$;
 
--- G) Configure permissive RLS: all authenticated users can read/write
+-- G. Set SIMPLE ACCESS: keep RLS enabled but allow all authenticated users full access
+--    Apply to domain tables that previously had org-based RLS.
+--    If a table doesn't exist, the statement is skipped via dynamic SQL.
+
 DO $$
 DECLARE
-  t TEXT;
-  pol RECORD;
-BEGIN
-  FOR t IN SELECT unnest(ARRAY[
+  t RECORD;
+  tables TEXT[] := ARRAY[
     'public.profiles',
     'public.calls',
     'public.campaigns',
@@ -188,21 +188,23 @@ BEGIN
     'public.knowledge_base_articles',
     'public.user_login_logs',
     'public.contacts'
-  ]) LOOP
+  ];
+BEGIN
+  FOREACH t IN ARRAY tables LOOP
     BEGIN
       EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', t);
-      -- Drop all existing policies on the table
-      FOR pol IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename = split_part(t, '.', 2)
+      -- Drop any lingering policies so we can set unified ones
+      FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename = split_part(t, '.', 2)
       LOOP
-        EXECUTE format('DROP POLICY %I ON %s', pol.policyname, t);
+        EXECUTE format('DROP POLICY %I ON %s', r.policyname, t);
       END LOOP;
-      -- Create permissive policies
+      -- Create permissive policies for authenticated users
       EXECUTE format('CREATE POLICY all_auth_read ON %s FOR SELECT USING (auth.uid() IS NOT NULL)', t);
       EXECUTE format('CREATE POLICY all_auth_insert ON %s FOR INSERT WITH CHECK (auth.uid() IS NOT NULL)', t);
       EXECUTE format('CREATE POLICY all_auth_update ON %s FOR UPDATE USING (auth.uid() IS NOT NULL)', t);
       EXECUTE format('CREATE POLICY all_auth_delete ON %s FOR DELETE USING (auth.uid() IS NOT NULL)', t);
     EXCEPTION WHEN undefined_table THEN
-      -- Table not present; skip
+      -- skip
       NULL;
     END;
   END LOOP;

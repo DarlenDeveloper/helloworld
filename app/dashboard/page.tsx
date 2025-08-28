@@ -7,7 +7,6 @@ import { Filter, LogOut, Plus, Eye, UserIcon } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -105,7 +104,6 @@ export default function Dashboard() {
   const [callType, setCallType] = useState<'inbound' | 'outbound'>("inbound")
   const [selectedCall, setSelectedCall] = useState<FormattedCall | null>(null)
   const [user, setUser] = useState<User | null>(null)
-  const [orgId, setOrgId] = useState<string | null>(null)
   const [calls, setCalls] = useState<Call[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [callStats, setCallStats] = useState<CallStats>({
@@ -121,106 +119,72 @@ export default function Dashboard() {
   })
   const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string }[]>([])
   const [loading, setLoading] = useState(true)
-  const [needsOrg, setNeedsOrg] = useState(false)
-  const [orgCreateName, setOrgCreateName] = useState("")
-  const [orgCreating, setOrgCreating] = useState(false)
-  const [orgError, setOrgError] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         router.push("/login")
         return
       }
       setUser(user)
-      // Resolve organization membership
-      const { data: membershipRows } = await supabase
-        .from('organization_members')
-        .select('organization_id, created_at')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-
-      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-      if (!membership) {
-        // Attempt to auto-recover membership before asking user to create an organization
-        const attached = await ensureMembership(user)
-        if (!attached) {
-          setNeedsOrg(true)
-          setLoading(false)
-          return
-        }
-        setOrgId(attached)
-        await fetchData(attached)
-        setLoading(false)
-        return
-      }
-      setOrgId(membership.organization_id)
-      await fetchData(membership.organization_id)
+      await fetchData()
       setLoading(false)
     }
-
-    checkAuth()
+    init()
   }, [router, supabase])
 
-  const fetchData = async (orgId: string) => {
+  const fetchData = async () => {
     try {
-      // Fetch calls with real-time subscription
+      // Fetch calls (global, no org filter)
       const { data: callsData, error: callsError } = await supabase
         .from("calls")
         .select("*")
-        .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
         .limit(10)
 
       if (callsError) {
         console.error("Error fetching calls:", callsError)
       } else {
-        setCalls(callsData as Call[] || [])
-        calculateCallStats(callsData as Call[] || [])
+        setCalls((callsData as Call[]) || [])
+        calculateCallStats((callsData as Call[]) || [])
       }
 
-      // Set up real-time subscription for calls
+      // Subscribe to global changes for calls
       const callsSubscription: RealtimeChannel = supabase
         .channel('calls-changes')
         .on('postgres_changes',
-          { event: '*', schema: 'public', table: 'calls', filter: `organization_id=eq.${orgId}` },
-          (payload) => {
-            console.log('Calls change received!', payload)
-            fetchData(orgId)
+          { event: '*', schema: 'public', table: 'calls' },
+          () => {
+            fetchData()
           }
         )
         .subscribe()
 
-      // Fetch campaigns
+      // Fetch campaigns (global, no org filter)
       const { data: campaignsData, error: campaignsError } = await supabase
         .from("campaigns")
         .select("*")
-        .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
 
       if (campaignsError) {
         console.error("Error fetching campaigns:", campaignsError)
       } else {
-        setCampaigns(campaignsData as Campaign[] || [])
+        setCampaigns((campaignsData as Campaign[]) || [])
       }
       
-      // Fetch call metrics
+      // Fetch call metrics from call_history (global, no org filter)
       const { data: callHistoryData, error: callHistoryError } = await supabase
         .from("call_history")
         .select("*")
-        .eq("organization_id", orgId)
-        
+      
       if (callHistoryError) {
         console.error("Error fetching call history:", callHistoryError)
       } else {
-        calculateCallMetrics(callHistoryData as CallHistory[] || [])
-        calculateTalkingPoints(callHistoryData as CallHistory[] || [])
+        calculateCallMetrics((callHistoryData as CallHistory[]) || [])
+        calculateTalkingPoints((callHistoryData as CallHistory[]) || [])
       }
 
       return () => {
@@ -231,68 +195,6 @@ export default function Dashboard() {
     }
   }
 
-  // Try to ensure the user has a membership by linking to an existing org they own or via account_emails
-  const ensureMembership = async (u: User): Promise<string | null> => {
-    try {
-      // 1) If user created an organization (created_by), attach as first/admin member if needed
-      const { data: orgRows } = await supabase
-        .from('organizations')
-        .select('id')
-        .eq('created_by', u.id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-      const ownOrg = (orgRows || [])[0] as { id: string } | undefined
-      const roleMeta = (u.user_metadata?.role as string) || 'admin'
-      const safeRole = ['admin','manager','agent','viewer'].includes(roleMeta) ? roleMeta : 'admin'
-
-      if (ownOrg?.id) {
-        // attempt insert membership (allowed by policy for first member)
-        await supabase
-          .from('organization_members')
-          .insert({ organization_id: ownOrg.id, user_id: u.id, role: safeRole as any })
-          .select('organization_id')
-        // re-check membership
-        const { data: membershipRows } = await supabase
-          .from('organization_members')
-          .select('organization_id')
-          .eq('user_id', u.id)
-          .order('created_at', { ascending: true })
-          .limit(1)
-        const m = (membershipRows || [])[0] as { organization_id: string } | undefined
-        if (m?.organization_id) return m.organization_id
-      }
-
-      // 2) If admin added this user's email in account_emails, attempt to join that org
-      const userEmail = (u.email || '').toLowerCase()
-      if (userEmail) {
-        const { data: emailRows } = await supabase
-          .from('account_emails')
-          .select('organization_id')
-          .eq('email', userEmail)
-          .order('created_at', { ascending: true })
-          .limit(1)
-        const emailOrg = (emailRows || [])[0] as { organization_id: string } | undefined
-        if (emailOrg?.organization_id) {
-          await supabase
-            .from('organization_members')
-            .insert({ organization_id: emailOrg.organization_id, user_id: u.id, role: 'agent' as any })
-            .select('organization_id')
-          const { data: membershipRows2 } = await supabase
-            .from('organization_members')
-            .select('organization_id')
-            .eq('user_id', u.id)
-            .order('created_at', { ascending: true })
-            .limit(1)
-          const m2 = (membershipRows2 || [])[0] as { organization_id: string } | undefined
-          if (m2?.organization_id) return m2.organization_id
-        }
-      }
-    } catch (e) {
-      console.error('ensureMembership failed:', e)
-    }
-    return null
-  }
-
   const handleLogout = async () => {
     await supabase.auth.signOut()
     router.push("/login")
@@ -300,12 +202,8 @@ export default function Dashboard() {
 
   // Calculate call statistics from calls data
   const calculateCallStats = (callsData: Call[]) => {
-    // Count calls by type and status
     const inboundCalls = callsData.filter(call => call.call_type === 'inbound')
     const outboundCalls = callsData.filter(call => call.call_type === 'outbound')
-    
-    const inboundTotal = inboundCalls.length || 1 // Avoid division by zero
-    const outboundTotal = outboundCalls.length || 1
     
     const stats: CallStats = {
       inbound: {
@@ -319,25 +217,18 @@ export default function Dashboard() {
         notAnswered: outboundCalls.filter(call => call.status === 'missed').length
       }
     }
-    
     setCallStats(stats)
   }
   
   // Calculate call metrics
   const calculateCallMetrics = (callHistoryData: CallHistory[]) => {
-    // Example calculation for remaining minutes (assuming a total package of 5000 minutes)
     const totalPackageMinutes = 5000
     const usedMinutes = callHistoryData.reduce((total: number, call) => total + (call.duration || 0), 0) / 60
     const remaining = Math.max(0, totalPackageMinutes - usedMinutes)
     const percentRemaining = Math.round((remaining / totalPackageMinutes) * 100)
-    
-    // Calculate average call duration
     const totalCalls = callHistoryData.length || 1
     const avgDuration = callHistoryData.length ? Math.round((usedMinutes / totalCalls) * 10) / 10 : 0
-    
-    // For demo purposes, simulate change percentage
-    const avgChangePercent = 12 // +12% from last week
-    
+    const avgChangePercent = 12
     setCallMetrics({
       totalMinutes: totalPackageMinutes,
       remainingMinutes: Math.round(remaining),
@@ -380,66 +271,6 @@ export default function Dashboard() {
     }))
 
     setTalkingPoints(points)
-  }
-  
-  const handleCreateOrganization = async () => {
-    setOrgError(null)
-    if (!orgCreateName.trim()) {
-      setOrgError("Organization name is required")
-      return
-    }
-    setOrgCreating(true)
-    try {
-      await supabase.rpc('create_organization', { p_name: orgCreateName.trim() })
-      // Resolve membership again
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data: membershipRows } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-      if (membership) {
-        setOrgId(membership.organization_id)
-        setNeedsOrg(false)
-        await fetchData(membership.organization_id)
-      }
-    } catch (e) {
-      console.error(e)
-      setOrgError("Failed to create organization. Please try again.")
-    } finally {
-      setOrgCreating(false)
-    }
-  }
-
-  if (needsOrg) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Create Your Organization</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <p className="text-sm text-gray-600">Enter your organization name to get started.</p>
-              <Input
-                placeholder="Organization Name"
-                value={orgCreateName}
-                onChange={(e) => setOrgCreateName(e.target.value)}
-              />
-              {orgError && <p className="text-sm text-red-600">{orgError}</p>}
-              <div className="flex justify-end">
-                <Button onClick={handleCreateOrganization} disabled={orgCreating} className="bg-teal-500 hover:bg-teal-600">
-                  {orgCreating ? "Creating..." : "Create Organization"}
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    )
   }
 
   if (loading) {

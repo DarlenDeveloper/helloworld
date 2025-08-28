@@ -4,23 +4,27 @@ import { createClient } from "@/lib/supabase/server"
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export async function POST() {
-  const supabase = createClient()
+  const supabase = await createClient()
 
-  // Fetch active campaigns with webhook
+  const globalWebhook = process.env.CAMPAIGN_WEBHOOK_URL
+  if (!globalWebhook) {
+    // No webhook configured; nothing to do
+    return NextResponse.json({ success: true, message: "CAMPAIGN_WEBHOOK_URL not set; dispatcher skipped." })
+  }
+
+  // Fetch active campaigns
   const { data: campaigns, error: campErr } = await supabase
     .from("campaigns")
-    .select("id, webhook_url, status")
+    .select("id, status")
     .eq("status", "active")
 
   if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 })
 
   for (const campaign of campaigns || []) {
-    if (!campaign.webhook_url) continue
-
-    // Optional backfill: ensure queue accounts for all linked batch contacts
+    // Backfill campaign_contacts from linked batches (idempotent)
     await supabase.rpc("populate_campaign_contacts", { p_campaign: campaign.id })
 
-    // Mark sent as done if call exists
+    // Mark previously sent contacts as done if call exists
     const { data: sentRows } = await supabase
       .from("campaign_contacts")
       .select("id, contact_id")
@@ -44,7 +48,7 @@ export async function POST() {
       }
     }
 
-    // Next 10 pending
+    // Pick next up to 10 pending contacts
     const { data: pendRows } = await supabase
       .from("campaign_contacts")
       .select("id, contact_id")
@@ -55,7 +59,6 @@ export async function POST() {
 
     if (!pendRows || pendRows.length === 0) continue
 
-    // Load contact details
     const contactIds = pendRows.map((r) => r.contact_id)
     const { data: contacts } = await supabase
       .from("contacts")
@@ -65,42 +68,41 @@ export async function POST() {
     const byId = new Map<string, any>()
     ;(contacts || []).forEach((c) => byId.set(c.id, c))
 
-    // Dispatch
-    for (const row of pendRows) {
-      const payload = {
-        campaign_id: campaign.id,
-        contact_id: row.contact_id,
-        contact: byId.get(row.contact_id) || null,
-      }
+    // Prepare one batched payload with up to 10 contacts
+    const payload = {
+      campaign_id: campaign.id,
+      contacts: pendRows.map((r) => ({ contact_id: r.contact_id, contact: byId.get(r.contact_id) || null })),
+    }
 
-      try {
-        const resp = await fetch(campaign.webhook_url!, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
+    try {
+      const resp = await fetch(globalWebhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
 
-        if (!resp.ok) {
-          const text = await resp.text()
-          await supabase
-            .from("campaign_contacts")
-            .update({ status: "failed", attempts: 1, last_error: `HTTP ${resp.status}: ${text}`.slice(0, 1000) })
-            .eq("id", row.id)
-        } else {
-          await supabase
-            .from("campaign_contacts")
-            .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
-            .eq("id", row.id)
-        }
-      } catch (e: any) {
+      const ids = pendRows.map((r) => r.id)
+      if (!resp.ok) {
+        const text = await resp.text()
         await supabase
           .from("campaign_contacts")
-          .update({ status: "failed", attempts: 1, last_error: String(e).slice(0, 1000) })
-          .eq("id", row.id)
+          .update({ status: "failed", attempts: 1, last_error: `HTTP ${resp.status}: ${text}`.slice(0, 1000) })
+          .in("id", ids)
+      } else {
+        await supabase
+          .from("campaign_contacts")
+          .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
+          .in("id", ids)
       }
 
-      // 1 per second
-      await sleep(1000)
+      // If you still want to gently rate limit the receiving system, sleep ~10s
+      await sleep(10000)
+    } catch (e: any) {
+      const ids = pendRows.map((r) => r.id)
+      await supabase
+        .from("campaign_contacts")
+        .update({ status: "failed", attempts: 1, last_error: String(e).slice(0, 1000) })
+        .in("id", ids)
     }
   }
 

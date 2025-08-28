@@ -2,17 +2,25 @@ import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
-  const { webhook_url } = await req.json()
+  const supabase = await createClient()
   const campaignId = params.id
 
-  if (!webhook_url || typeof webhook_url !== "string") {
-    return NextResponse.json({ error: "webhook_url is required" }, { status: 400 })
+  let webhook_url: unknown = undefined
+  try {
+    const body = await req.json()
+    webhook_url = body?.webhook_url
+  } catch {
+    // no body provided; treat as optional
+  }
+
+  const update: any = { status: "active" }
+  if (typeof webhook_url === "string" && webhook_url.trim().length > 0) {
+    update.webhook_url = webhook_url.trim()
   }
 
   const { error: upErr } = await supabase
     .from("campaigns")
-    .update({ webhook_url, status: "active" })
+    .update(update)
     .eq("id", campaignId)
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 })
 

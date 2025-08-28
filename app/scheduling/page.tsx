@@ -122,39 +122,28 @@ export default function SchedulingPage() {
   }
 
   const fetchBatchContacts = async (batchId: string) => {
-    if (!user) return
-
-    // Fetch the contact IDs from the junction table
-    const { data: linkRows, error: linkErr } = await supabase
+    // Read snapshot contact data directly from batch_contacts
+    const { data, error } = await supabase
       .from("batch_contacts")
-      .select("contact_id")
+      .select("contact_id, name, email, phone, notes")
       .eq("batch_id", batchId)
+      .order("created_at", { ascending: false })
 
-    if (linkErr) {
-      console.error("Error fetching batch_contacts:", linkErr)
+    if (error) {
+      console.error("Error fetching batch_contacts:", error)
       setSelectedBatchContacts([])
       return
     }
 
-    const ids = (linkRows || []).map((r: any) => r.contact_id)
-    if (ids.length === 0) {
-      setSelectedBatchContacts([])
-      return
-    }
-
-    const { data: contacts, error: contactsErr } = await supabase
-      .from("contacts")
-      .select("id, user_id, name, email, phone, notes")
-      .in("id", ids)
-      .eq("user_id", user.id)
-
-    if (contactsErr) {
-      console.error("Error fetching contacts:", contactsErr)
-      setSelectedBatchContacts([])
-      return
-    }
-
-    setSelectedBatchContacts((contacts || []) as DbContact[])
+    const mapped: DbContact[] = (data || []).map((r: any) => ({
+      id: r.contact_id,
+      user_id: user?.id || "",
+      name: r.name,
+      email: r.email,
+      phone: r.phone,
+      notes: r.notes,
+    }))
+    setSelectedBatchContacts(mapped)
   }
 
   const fetchCampaigns = async (userId: string) => {
@@ -362,8 +351,15 @@ export default function SchedulingPage() {
       const chunks = chunk(uniqueByPhone, CHUNK_SIZE)
       let totalInserted = 0
 
-      for (let i = 0; i < chunks.length; i++) {
-        const c = chunks[i]
+      let allowedRemaining = Math.max(0, 1000 - (batchMap.get(selectedBatch)?.contact_count || 0))
+      if (allowedRemaining === 0) {
+        alert("This batch already has 1000 contacts." )
+        return
+      }
+
+      for (let i = 0; i < chunks.length && allowedRemaining > 0; i++) {
+        // Trim chunk to limit
+        const c = chunks[i].slice(0, allowedRemaining)
         // Insert contacts
         const contactRows = c.map((r) => ({ user_id: user.id, name: null, email: null, phone: r.phone, notes: r.notes || null }))
         const { data: inserted, error: insErr } = await supabase
@@ -377,7 +373,15 @@ export default function SchedulingPage() {
           break
         }
 
-        const linkRows = (inserted || []).map((row: any) => ({ batch_id: selectedBatch, contact_id: row.id }))
+        const linkRows = (inserted || []).map((row: any, idx: number) => ({
+          batch_id: selectedBatch,
+          contact_id: row.id,
+          // snapshot from parsed chunk "c"
+          name: null,
+          email: null,
+          phone: c[idx]?.phone || null,
+          notes: c[idx]?.notes || null,
+        }))
         if (linkRows.length > 0) {
           const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
           if (linkErr) {
@@ -440,7 +444,7 @@ export default function SchedulingPage() {
 
       const { error: linkErr } = await supabase
         .from("batch_contacts")
-        .insert({ batch_id: selectedBatch, contact_id: inserted.id })
+        .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email: manualContact.email || null, phone, notes: manualContact.notes || null })
       if (linkErr) {
         console.error("Failed linking contact to batch:", linkErr)
         alert("Failed to link contact to batch")

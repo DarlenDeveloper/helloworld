@@ -341,7 +341,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="p-6 ml-16">
+    <div className="p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl text-black text-justify font-black">Dashboard</h1>

@@ -40,13 +40,17 @@ export function Sidebar() {
   const handleSidebarClick = (e: React.MouseEvent) => {
     // Only toggle if clicking on the sidebar background, not on links
     if (e.target === e.currentTarget) {
-      setIsExpanded(!isExpanded)
+      const next = !isExpanded
+      setIsExpanded(next)
+      try {
+        window.dispatchEvent(new CustomEvent("sidebar:toggled", { detail: { isExpanded: next } }))
+      } catch {}
     }
   }
 
   return (
     <div
-      className={`fixed inset-y-0 left-0 z-50 flex h-full flex-col bg-background p-3 shadow-md transition-all my-1 gap-0.5 ${
+      className={`hidden sm:flex fixed inset-y-0 left-0 z-50 h-full flex-col bg-background p-3 shadow-md transition-all my-1 gap-0.5 ${
         isExpanded ? "w-64" : "w-16"
       }`}
       onClick={handleSidebarClick}
@@ -60,7 +64,11 @@ export function Sidebar() {
             title={isExpanded ? "Collapse" : "Expand"}
             onClick={(e) => {
               e.stopPropagation()
-              setIsExpanded(!isExpanded)
+              const next = !isExpanded
+              setIsExpanded(next)
+              try {
+                window.dispatchEvent(new CustomEvent("sidebar:toggled", { detail: { isExpanded: next } }))
+              } catch {}
             }}
             className="p-2 rounded-md text-muted-foreground hover:bg-muted"
           >

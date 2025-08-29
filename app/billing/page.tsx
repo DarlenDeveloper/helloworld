@@ -104,7 +104,7 @@ export default function BillingPage() {
 
   if (showPaymentGateway) {
     return (
-      <div className="ml-16 p-6 min-h-screen bg-white">
+      <div className="p-6 min-h-screen bg-white">
         <div className="max-w-2xl mx-auto">
           <Card>
             <CardHeader className="text-center">
@@ -168,7 +168,7 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="ml-16 p-6 min-h-screen bg-white">
+    <div className="p-6 min-h-screen bg-white">
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-black">Billing & Subscription</h1>

@@ -4,6 +4,7 @@ import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import "./globals.css"
 import { ClientSidebar } from "@/components/client-sidebar"
+import { ContentContainer } from "@/components/content-container"
 
 export const metadata: Metadata = {
   title: "AI Agent Dashboard",
@@ -42,7 +43,7 @@ function ConditionalLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <ClientSidebar />
-      <main className="flex-1">{children}</main>
+      <ContentContainer>{children}</ContentContainer>
     </>
   )
 }

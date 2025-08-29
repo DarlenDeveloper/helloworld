@@ -26,6 +26,28 @@ export default function Auth() {
   const router = useRouter()
   const supabase = createClient()
 
+  // Log successful login to user_login_logs
+  const logSuccessfulLogin = async (userId: string, emailAddr: string) => {
+    try {
+      let ip: string | null = null
+      try {
+        const resp = await fetch("https://api.ipify.org?format=json")
+        if (resp.ok) {
+          const j = await resp.json()
+          ip = j.ip || null
+        }
+      } catch {}
+      const ua = typeof navigator !== "undefined" ? navigator.userAgent : null
+      await supabase.from("user_login_logs").insert({
+        user_id: userId,
+        email: emailAddr,
+        status: "success",
+        ip_address: ip,
+        user_agent: ua,
+      })
+    } catch {}
+  }
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -40,6 +62,7 @@ export default function Auth() {
       if (error) {
         setError(error.message)
       } else if (data.user) {
+        await logSuccessfulLogin(data.user.id, data.user.email ?? email)
         router.push("/dashboard")
         router.refresh()
       }

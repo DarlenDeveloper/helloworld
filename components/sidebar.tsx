@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect } from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, ChevronsLeft, ChevronsRight } from "lucide-react"
+import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, ChevronsLeft, ChevronsRight, MessageCircle, Mail } from "lucide-react"
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -29,6 +29,8 @@ export function Sidebar() {
   const menuItems = [
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
+    { icon: MessageCircle, href: "/scheduling/whatsapp", label: "WhatsApp Scheduling", active: pathname === "/scheduling/whatsapp" },
+    { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },
     { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },

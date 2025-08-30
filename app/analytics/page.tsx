@@ -22,10 +22,7 @@ interface TalkingPointDatum { name: string; value: number; color: string; calls:
 
 const STATUS_COLORS: Record<string, string> = {
   completed: "#14b8a6",
-  no_answer: "#6b7280",
-  busy: "#f59e0b",
-  voicemail: "#3b82f6",
-  failed: "#ef4444",
+  missed: "#ef4444",
 }
 
 export default function AnalyticsPage() {
@@ -88,17 +85,29 @@ export default function AnalyticsPage() {
         }))
         setCallsData(newCallsData)
 
-        // Status breakdown
-        const statusCounts: Record<string, number> = { completed: 0, no_answer: 0, busy: 0, voicemail: 0, failed: 0 }
-        rows.forEach((r) => {
-          if (statusCounts[r.status] !== undefined) statusCounts[r.status]++
-        })
-        const follow: FollowUpDatum[] = Object.entries(statusCounts).map(([name, value]) => ({
-          name,
-          value,
-          color: STATUS_COLORS[name] || "#94a3b8",
-        }))
-        setFollowUpData(follow)
+        // Status breakdown from calls table
+        const { data: callsRows, error: callsErr } = await supabase
+          .from("calls")
+          .select("id,user_id,status,created_at")
+          .eq("user_id", user.id)
+          .gte("created_at", startISO)
+          .lte("created_at", endISO)
+
+        if (callsErr) {
+          console.error("Status breakdown fetch error (calls):", callsErr)
+          setFollowUpData([])
+        } else {
+          let completed = 0, missed = 0
+          ;(callsRows || []).forEach((r: any) => {
+            if (r.status === "completed") completed++
+            else if (r.status === "missed") missed++
+          })
+          const follow: FollowUpDatum[] = [
+            { name: "completed", value: completed, color: STATUS_COLORS["completed"] || "#14b8a6" },
+            { name: "missed", value: missed, color: STATUS_COLORS["missed"] || "#ef4444" },
+          ]
+          setFollowUpData(follow)
+        }
 
         // Talking points from summaries/notes
         const text = rows
@@ -131,9 +140,11 @@ export default function AnalyticsPage() {
 
       // subscribe for updates in window
       const channel = supabase
-        .channel("analytics_call_history")
+        .channel("analytics_updates")
         .on("postgres_changes", { event: "*", schema: "public", table: "call_history" }, () => {
-          // refetch on any changes
+          run()
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
           run()
         })
         .subscribe()

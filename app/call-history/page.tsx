@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react"
 import { Calendar, Download, Search, Phone, Clock } from "lucide-react"
+import { DayPicker } from "react-day-picker"
+import "react-day-picker/dist/style.css"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,13 +16,61 @@ export default function CallHistoryPage() {
   const [selectedCampaign, setSelectedCampaign] = useState("all")
   const [campaignOptions, setCampaignOptions] = useState<string[]>(["all"]) 
   const [selectedFilter, setSelectedFilter] = useState("all")
-  const [dateRange, setDateRange] = useState<string>("Last 7 days")
+  const [selectedRange, setSelectedRange] = useState<{ from?: Date; to?: Date }>(() => {
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - 6)
+    start.setHours(0, 0, 0, 0)
+    end.setHours(23, 59, 59, 999)
+    return { from: start, to: end }
+  })
+  const [rangeLabel, setRangeLabel] = useState("Last 7 days")
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [callHistory, setCallHistory] = useState<any[]>([])
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   const supabase = createClient()
   const [orgId, setOrgId] = useState<string | null>(null)
+
+  function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x }
+  function endOfDay(d: Date) { const x = new Date(d); x.setHours(23,59,59,999); return x }
+  function formatDate(d: Date) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }
+  function applyPreset(preset: 'today' | 'last7' | 'thisMonth' | 'lastMonth' | 'all') {
+    const now = new Date()
+    if (preset === 'today') {
+      const from = startOfDay(now)
+      const to = endOfDay(now)
+      setSelectedRange({ from, to })
+      setRangeLabel('Today')
+    } else if (preset === 'last7') {
+      const to = endOfDay(now)
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6))
+      setSelectedRange({ from, to })
+      setRangeLabel('Last 7 days')
+    } else if (preset === 'thisMonth') {
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1))
+      const to = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+      setSelectedRange({ from, to })
+      setRangeLabel('This month')
+    } else if (preset === 'lastMonth') {
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+      const to = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0))
+      setSelectedRange({ from, to })
+      setRangeLabel('Last month')
+    } else {
+      setSelectedRange({})
+      setRangeLabel('All time')
+    }
+    setIsCalendarOpen(false)
+  }
+  function applyRange() {
+    if (selectedRange.from && selectedRange.to) {
+      setRangeLabel(`${formatDate(selectedRange.from)} - ${formatDate(selectedRange.to)}`)
+    } else {
+      setRangeLabel('All time')
+    }
+    setIsCalendarOpen(false)
+  }
 
   useEffect(() => {
     const init = async () => {
@@ -104,11 +154,13 @@ export default function CallHistoryPage() {
               ? "Voicemail"
               : "Not Resolved"
 
+          const dt = new Date(call.call_date || call.created_at)
           return {
             id: call.id,
             status: mappedStatus,
             contact: call.phone_number || "Unknown",
-            dateTime: new Date(call.call_date || call.created_at).toLocaleString(),
+            dateTime: dt.toLocaleString(),
+            ts: dt.getTime(),
             statusColor:
               mappedStatus === "Resolved"
                 ? "bg-green-500"
@@ -156,7 +208,15 @@ export default function CallHistoryPage() {
 
     const matchesFilter = selectedFilter === "all" || call.status?.toLowerCase().replace(" ", "-") === selectedFilter
 
-    return matchesSearch && matchesCampaign && matchesFilter
+    const matchesDate = (() => {
+      if (!selectedRange.from || !selectedRange.to) return true
+      const start = startOfDay(selectedRange.from).getTime()
+      const end = endOfDay(selectedRange.to).getTime()
+      const ts = call.ts ?? 0
+      return ts >= start && ts <= end
+    })()
+
+    return matchesSearch && matchesCampaign && matchesFilter && matchesDate
   })
 
   // Calculate metrics based on filtered data
@@ -208,28 +268,38 @@ export default function CallHistoryPage() {
             <DialogTrigger asChild>
               <Button variant="outline" className="flex items-center gap-2 bg-transparent">
                 <Calendar className="h-4 w-4" />
-                {dateRange}
+                {rangeLabel}
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>Select Date Range</DialogTitle>
               </DialogHeader>
-              <div className="p-4">
-                <div className="grid grid-cols-7 gap-2 mb-4">
-                  {/* Mock calendar - simplified for demo */}
-                  {Array.from({ length: 31 }, (_, i) => (
-                    <button
-                      key={i}
-                      className="p-2 text-sm hover:bg-teal-100 rounded"
-                      onClick={() => {
-                        setDateRange(`Jan ${i + 1} - Jan ${Math.min(i + 7, 31)}`)
-                        setIsCalendarOpen(false)
-                      }}
-                    >
-                      {i + 1}
-                    </button>
-                  ))}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-gray-700">Presets</div>
+                  <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
+                    <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('today')}>Today</Button>
+                    <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('last7')}>Last 7 days</Button>
+                    <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('thisMonth')}>This month</Button>
+                    <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('lastMonth')}>Last month</Button>
+                    <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('all')}>All time</Button>
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <DayPicker
+                    mode="range"
+                    numberOfMonths={2}
+                    showOutsideDays
+                    selected={selectedRange}
+                    onSelect={setSelectedRange}
+                    weekStartsOn={1}
+                    captionLayout="buttons"
+                  />
+                  <div className="flex justify-end gap-2 mt-2">
+                    <Button variant="outline" className="bg-transparent" onClick={() => { setSelectedRange({}); setRangeLabel('All time'); setIsCalendarOpen(false); }}>Clear</Button>
+                    <Button onClick={applyRange} className="bg-teal-500 hover:bg-teal-600">Apply</Button>
+                  </div>
                 </div>
               </div>
             </DialogContent>
@@ -254,7 +324,7 @@ export default function CallHistoryPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-black">{totalCalls}</div>
-            <p className="text-xs text-gray-500">{dateRange}</p>
+            <p className="text-xs text-gray-500">{rangeLabel}</p>
           </CardContent>
         </Card>
 

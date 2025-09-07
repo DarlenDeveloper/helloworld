@@ -65,6 +65,7 @@ export default function WhatsAppSchedulingPage() {
   const [campaignForm, setCampaignForm] = useState({
     name: "",
     prompt: "",
+    sendIntervalSeconds: 1,
     selectedBatches: [] as string[],
   })
 
@@ -111,7 +112,7 @@ export default function WhatsAppSchedulingPage() {
 
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("whatsapp_contact_batches")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -126,7 +127,7 @@ export default function WhatsAppSchedulingPage() {
   const fetchBatchContacts = async (batchId: string) => {
     // Read snapshot contact data directly from batch_contacts
     const { data, error } = await supabase
-      .from("batch_contacts")
+      .from("whatsapp_batch_contacts")
       .select("contact_id, name, email, phone, notes")
       .eq("batch_id", batchId)
       .order("created_at", { ascending: false })
@@ -150,7 +151,7 @@ export default function WhatsAppSchedulingPage() {
 
   const fetchCampaigns = async (userId: string) => {
     const { data, error } = await supabase
-      .from("campaigns")
+      .from("whatsapp_campaigns")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -167,7 +168,7 @@ export default function WhatsAppSchedulingPage() {
     const defaultName = `New Batch ${contactBatches.length + 1}`
 
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("whatsapp_contact_batches")
       .insert({ user_id: user.id, name: defaultName, description: null })
       .select("*")
       .single()
@@ -186,7 +187,7 @@ export default function WhatsAppSchedulingPage() {
     if (!confirm("Delete this batch?")) return
 
     const { error } = await supabase
-      .from("contact_batches")
+      .from("whatsapp_contact_batches")
       .delete()
       .eq("id", batchId)
       .eq("user_id", user.id)
@@ -207,7 +208,7 @@ export default function WhatsAppSchedulingPage() {
   const handleRenameBatch = async (batchId: string, newName: string) => {
     if (!user) return
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("whatsapp_contact_batches")
       .update({ name: newName })
       .eq("id", batchId)
       .eq("user_id", user.id)
@@ -255,10 +256,11 @@ export default function WhatsAppSchedulingPage() {
     try {
       const totalContacts = campaignForm.selectedBatches.reduce((sum, id) => sum + (batchMap.get(id)?.contact_count || 0), 0)
 
-      const description = `Channel: WhatsApp\nRateLimitPerSec: 1\nPrompt: ${campaignForm.prompt}`
+      const ratePerSec = campaignForm.sendIntervalSeconds > 0 ? (1 / campaignForm.sendIntervalSeconds) : 1
+      const description = `Channel: WhatsApp\nIntervalSeconds: ${campaignForm.sendIntervalSeconds}\nRateLimitPerSec: ${ratePerSec}\nPrompt: ${campaignForm.prompt}`
 
       const { data: newCampaign, error } = await supabase
-        .from("campaigns")
+        .from("whatsapp_campaigns")
         .insert({
           user_id: user.id,
           name: campaignForm.name.trim(),
@@ -277,14 +279,14 @@ export default function WhatsAppSchedulingPage() {
 
       if (campaignForm.selectedBatches.length > 0) {
         const rows = campaignForm.selectedBatches.map((batchId) => ({ campaign_id: newCampaign.id, batch_id: batchId }))
-        const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
+        const { error: linkErr } = await supabase.from("whatsapp_campaign_batches").insert(rows)
         if (linkErr) {
           console.error("Failed to link campaign batches:", linkErr)
         }
       }
 
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-      setCampaignForm({ name: "", prompt: "", selectedBatches: [] })
+      setCampaignForm({ name: "", prompt: "", sendIntervalSeconds: 1, selectedBatches: [] })
       setIsCreateCampaignOpen(false)
     } catch (err) {
       console.error("Error creating campaign:", err)
@@ -298,7 +300,7 @@ export default function WhatsAppSchedulingPage() {
     setStartingCampaignId(campaignId)
     setStarting(true)
     try {
-      const res = await fetch(`/api/campaigns/${campaignId}/start`, {
+      const res = await fetch(`/api/whatsapp-campaigns/${campaignId}/start`, {
         method: "POST",
         // Optionally pass a channel-specific webhook_url here
         // body: JSON.stringify({ webhook_url: "https://your-whatsapp-webhook.example.com" }),
@@ -407,7 +409,7 @@ export default function WhatsAppSchedulingPage() {
           notes: c[idx]?.notes || null,
         }))
         if (linkRows.length > 0) {
-          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
+          const { error: linkErr } = await supabase.from("whatsapp_batch_contacts").insert(linkRows)
           if (linkErr) {
             console.error("Failed linking batch contacts:", linkErr)
             alert("Failed to link some contacts to batch. See console for details.")
@@ -422,7 +424,7 @@ export default function WhatsAppSchedulingPage() {
       // Update batch contact_count in DB and in memory
       if (totalInserted > 0) {
         await supabase
-          .from("contact_batches")
+          .from("whatsapp_contact_batches")
           .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
           .eq("id", selectedBatch)
 
@@ -467,7 +469,7 @@ export default function WhatsAppSchedulingPage() {
       }
 
       const { error: linkErr } = await supabase
-        .from("batch_contacts")
+        .from("whatsapp_batch_contacts")
         .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email: manualContact.email || null, phone, notes: manualContact.notes || null })
       if (linkErr) {
         console.error("Failed linking contact to batch:", linkErr)
@@ -504,7 +506,7 @@ export default function WhatsAppSchedulingPage() {
           <div>
             <h1 className="text-3xl font-bold text-black">WhatsApp Scheduling</h1>
             <p className="text-gray-600 mt-2">Manage contact batches and create outbound WhatsApp campaigns</p>
-            <p className="text-xs text-gray-500 mt-1">Rate limit enforced: 1 message per second</p>
+            <p className="text-xs text-gray-500 mt-1">Dispatch interval: configurable (default 1s)</p>
           </div>
           <div className="flex gap-4">
             <Button variant="outline" className="border-gray-300 bg-transparent" onClick={handleCreateBatch}>
@@ -558,8 +560,12 @@ export default function WhatsAppSchedulingPage() {
                     <Textarea id="campaign-prompt" placeholder="Enter the script or prompt for this campaign..." rows={4} value={campaignForm.prompt} onChange={(e) => setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))} />
                   </div>
 
-                  {/* Rate limit note */}
-                  <div className="text-xs text-gray-500">Messages are dispatched at 1 per second.</div>
+                  {/* Send interval */}
+                  <div className="space-y-2">
+                    <Label htmlFor="send-interval">Send interval (seconds)</Label>
+                    <Input id="send-interval" type="number" min={1} step={1} value={campaignForm.sendIntervalSeconds} onChange={(e) => setCampaignForm((prev) => ({ ...prev, sendIntervalSeconds: Math.max(1, Number(e.target.value) || 1) }))} />
+                    <div className="text-xs text-gray-500">One message will be sent every <span className="font-medium">{campaignForm.sendIntervalSeconds}</span> second(s).</div>
+                  </div>
 
                   {/* Action Buttons */}
                   <div className="flex justify-end gap-3">
@@ -720,6 +726,19 @@ export default function WhatsAppSchedulingPage() {
                       <div className="space-y-2 text-sm text-gray-600">
                         <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>
                         <div className="flex items-center gap-2"><CalendarIcon className="h-4 w-4" />Created {format(new Date(campaign.created_at), "MMM d, yyyy")}</div>
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const m = (campaign.description || '').match(/^\s*IntervalSeconds\s*:\s*(.+)$/mi)
+                            const s = m ? Number((m[1] || '').trim()) : 1
+                            const interval = (!Number.isNaN(s) && s > 0) ? s : 1
+                            const total = Math.max(0, (campaign.target_contacts ?? 0) * interval)
+                            const hh = Math.floor(total / 3600)
+                            const mm = Math.floor((total % 3600) / 60)
+                            const ss = Math.floor(total % 60)
+                            const pad = (n: number) => n.toString().padStart(2, '0')
+                            return <span>Est. time: {hh > 0 ? `${hh}:` : ''}{pad(mm)}:{pad(ss)}</span>
+                          })()}
+                        </div>
                       </div>
                     </div>
                   ))}

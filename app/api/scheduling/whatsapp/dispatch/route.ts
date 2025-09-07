@@ -28,7 +28,7 @@ export async function POST() {
 
   // Find active WhatsApp campaigns (identified by Channel: WhatsApp in description)
   const { data: campaigns, error: campErr } = await supabase
-    .from("campaigns")
+    .from("whatsapp_campaigns")
     .select("id, status, description, webhook_url")
     .eq("status", "active")
     .order("created_at", { ascending: true })
@@ -41,11 +41,11 @@ export async function POST() {
     if (channel !== "whatsapp") continue
 
     // Ensure queue is populated for this campaign
-    await supabase.rpc("populate_campaign_contacts", { p_campaign: camp.id })
+    await supabase.rpc("populate_whatsapp_campaign_contacts", { p_campaign: camp.id })
 
     // Pick next up to 5 pending contacts for this campaign
     const { data: pendRows, error: pendErr } = await supabase
-      .from("campaign_contacts")
+      .from("whatsapp_campaign_contacts")
       .select("id, contact_id")
       .eq("campaign_id", camp.id)
       .eq("status", "pending")
@@ -72,13 +72,25 @@ export async function POST() {
     const prompt = parseField(camp.description, "Prompt") || ""
     const campaignWebhook = camp.webhook_url || webhook
 
+    // Determine pacing interval (seconds)
+    const intervalSecondsStr = parseField(camp.description, "IntervalSeconds") || parseField(camp.description, "RateLimitSeconds")
+    const perSecStr = parseField(camp.description, "RateLimitPerSec")
+    let intervalMs = 1000 // default 1 second
+    if (intervalSecondsStr) {
+      const s = Number(intervalSecondsStr)
+      if (!Number.isNaN(s) && s > 0) intervalMs = Math.round(s * 1000)
+    } else if (perSecStr) {
+      const n = Number(perSecStr)
+      if (!Number.isNaN(n) && n > 0) intervalMs = Math.round((1 / n) * 1000)
+    }
+
     for (const row of pendRows) {
       const contact = byId.get(row.contact_id)
       const phone = contact?.phone?.trim()
 
       if (!phone) {
         await supabase
-          .from("campaign_contacts")
+          .from("whatsapp_campaign_contacts")
           .update({ status: "failed", attempts: 1, last_error: "Missing phone for WhatsApp" })
           .eq("id", row.id)
         continue
@@ -102,25 +114,25 @@ export async function POST() {
         if (!resp.ok) {
           const txt = await resp.text()
           await supabase
-            .from("campaign_contacts")
+            .from("whatsapp_campaign_contacts")
             .update({ status: "failed", attempts: 1, last_error: `HTTP ${resp.status}: ${txt}`.slice(0, 1000) })
             .eq("id", row.id)
         } else {
           await supabase
-            .from("campaign_contacts")
+            .from("whatsapp_campaign_contacts")
             .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
             .eq("id", row.id)
           totalProcessed += 1
         }
       } catch (e: any) {
         await supabase
-          .from("campaign_contacts")
+          .from("whatsapp_campaign_contacts")
           .update({ status: "failed", attempts: 1, last_error: String(e).slice(0, 1000) })
           .eq("id", row.id)
       }
 
-      // Enforce 1/second pacing between each message
-      await sleep(1000)
+      // Enforce configurable pacing between each message
+      await sleep(intervalMs)
     }
   }
 

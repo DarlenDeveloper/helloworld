@@ -66,6 +66,7 @@ export default function EmailSchedulingPage() {
     name: "",
     subject: "",
     body: "",
+    sendIntervalSeconds: 1,
     selectedBatches: [] as string[],
   })
 
@@ -112,7 +113,7 @@ export default function EmailSchedulingPage() {
 
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("email_contact_batches")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -127,7 +128,7 @@ export default function EmailSchedulingPage() {
   const fetchBatchContacts = async (batchId: string) => {
     // Read snapshot contact data directly from batch_contacts
     const { data, error } = await supabase
-      .from("batch_contacts")
+      .from("email_batch_contacts")
       .select("contact_id, name, email, phone, notes")
       .eq("batch_id", batchId)
       .order("created_at", { ascending: false })
@@ -151,7 +152,7 @@ export default function EmailSchedulingPage() {
 
   const fetchCampaigns = async (userId: string) => {
     const { data, error } = await supabase
-      .from("campaigns")
+      .from("email_campaigns")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -168,7 +169,7 @@ export default function EmailSchedulingPage() {
     const defaultName = `New Batch ${contactBatches.length + 1}`
 
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("email_contact_batches")
       .insert({ user_id: user.id, name: defaultName, description: null })
       .select("*")
       .single()
@@ -187,7 +188,7 @@ export default function EmailSchedulingPage() {
     if (!confirm("Delete this batch?")) return
 
     const { error } = await supabase
-      .from("contact_batches")
+      .from("email_contact_batches")
       .delete()
       .eq("id", batchId)
       .eq("user_id", user.id)
@@ -208,7 +209,7 @@ export default function EmailSchedulingPage() {
   const handleRenameBatch = async (batchId: string, newName: string) => {
     if (!user) return
     const { data, error } = await supabase
-      .from("contact_batches")
+      .from("email_contact_batches")
       .update({ name: newName })
       .eq("id", batchId)
       .eq("user_id", user.id)
@@ -261,10 +262,11 @@ export default function EmailSchedulingPage() {
     try {
       const totalContacts = campaignForm.selectedBatches.reduce((sum, id) => sum + (batchMap.get(id)?.contact_count || 0), 0)
 
-      const description = `Channel: Email\nRateLimitPerSec: 1\nSubject: ${campaignForm.subject}\nBody: ${campaignForm.body}`
+      const ratePerSec = campaignForm.sendIntervalSeconds > 0 ? (1 / campaignForm.sendIntervalSeconds) : 1
+      const description = `Channel: Email\nIntervalSeconds: ${campaignForm.sendIntervalSeconds}\nRateLimitPerSec: ${ratePerSec}\nSubject: ${campaignForm.subject}\nBody: ${campaignForm.body}`
 
       const { data: newCampaign, error } = await supabase
-        .from("campaigns")
+        .from("email_campaigns")
         .insert({
           user_id: user.id,
           name: campaignForm.name.trim(),
@@ -283,7 +285,7 @@ export default function EmailSchedulingPage() {
 
       if (campaignForm.selectedBatches.length > 0) {
         const rows = campaignForm.selectedBatches.map((batchId) => ({ campaign_id: newCampaign.id, batch_id: batchId }))
-        const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
+        const { error: linkErr } = await supabase.from("email_campaign_batches").insert(rows)
         if (linkErr) {
           console.error("Failed to link campaign batches:", linkErr)
         }
@@ -304,7 +306,7 @@ export default function EmailSchedulingPage() {
     setStartingCampaignId(campaignId)
     setStarting(true)
     try {
-      const res = await fetch(`/api/campaigns/${campaignId}/start`, {
+      const res = await fetch(`/api/email-campaigns/${campaignId}/start`, {
         method: "POST",
         // Optionally pass a channel-specific webhook_url here
         // body: JSON.stringify({ webhook_url: "https://your-email-webhook.example.com" }),
@@ -413,7 +415,7 @@ export default function EmailSchedulingPage() {
           notes: null,
         }))
         if (linkRows.length > 0) {
-          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
+          const { error: linkErr } = await supabase.from("email_batch_contacts").insert(linkRows)
           if (linkErr) {
             console.error("Failed linking batch contacts:", linkErr)
             alert("Failed to link some contacts to batch. See console for details.")
@@ -428,7 +430,7 @@ export default function EmailSchedulingPage() {
       // Update batch contact_count in DB and in memory
       if (totalInserted > 0) {
         await supabase
-          .from("contact_batches")
+          .from("email_contact_batches")
           .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
           .eq("id", selectedBatch)
 
@@ -473,7 +475,7 @@ export default function EmailSchedulingPage() {
       }
 
       const { error: linkErr } = await supabase
-        .from("batch_contacts")
+        .from("email_batch_contacts")
         .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email, phone: null, notes: manualContact.notes || null })
       if (linkErr) {
         console.error("Failed linking contact to batch:", linkErr)
@@ -510,7 +512,7 @@ export default function EmailSchedulingPage() {
           <div>
             <h1 className="text-3xl font-bold text-black">Email Scheduling</h1>
             <p className="text-gray-600 mt-2">Manage contact batches and create outbound Email campaigns</p>
-            <p className="text-xs text-gray-500 mt-1">Rate limit enforced: 1 email per second</p>
+            <p className="text-xs text-gray-500 mt-1">Dispatch interval: configurable (default 1s)</p>
           </div>
           <div className="flex gap-4">
             <Button variant="outline" className="border-gray-300 bg-transparent" onClick={handleCreateBatch}>
@@ -570,8 +572,12 @@ export default function EmailSchedulingPage() {
                     <Textarea id="campaign-body" placeholder="Write your email body (supports variables like {{name}})" rows={6} value={campaignForm.body} onChange={(e) => setCampaignForm((prev) => ({ ...prev, body: e.target.value }))} />
                   </div>
 
-                  {/* Rate limit note */}
-                  <div className="text-xs text-gray-500">Emails are dispatched at 1 per second.</div>
+                  {/* Send interval */}
+                  <div className="space-y-2">
+                    <Label htmlFor="send-interval">Send interval (seconds)</Label>
+                    <Input id="send-interval" type="number" min={1} step={1} value={campaignForm.sendIntervalSeconds} onChange={(e) => setCampaignForm((prev) => ({ ...prev, sendIntervalSeconds: Math.max(1, Number(e.target.value) || 1) }))} />
+                    <div className="text-xs text-gray-500">One email will be sent every <span className="font-medium">{campaignForm.sendIntervalSeconds}</span> second(s).</div>
+                  </div>
 
                   {/* Action Buttons */}
                   <div className="flex justify-end gap-3">
@@ -732,6 +738,19 @@ export default function EmailSchedulingPage() {
                       <div className="space-y-2 text-sm text-gray-600">
                         <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>
                         <div className="flex items-center gap-2"><CalendarIcon className="h-4 w-4" />Created {format(new Date(campaign.created_at), "MMM d, yyyy")}</div>
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const m = (campaign.description || '').match(/^\s*IntervalSeconds\s*:\s*(.+)$/mi)
+                            const s = m ? Number((m[1] || '').trim()) : 1
+                            const interval = (!Number.isNaN(s) && s > 0) ? s : 1
+                            const total = Math.max(0, (campaign.target_contacts ?? 0) * interval)
+                            const hh = Math.floor(total / 3600)
+                            const mm = Math.floor((total % 3600) / 60)
+                            const ss = Math.floor(total % 60)
+                            const pad = (n: number) => n.toString().padStart(2, '0')
+                            return <span>Est. time: {hh > 0 ? `${hh}:` : ''}{pad(mm)}:{pad(ss)}</span>
+                          })()}
+                        </div>
                       </div>
                     </div>
                   ))}

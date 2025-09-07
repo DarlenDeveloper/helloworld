@@ -733,6 +733,20 @@ export default function SchedulingPage() {
                       <div className="space-y-2 text-sm text-gray-600">
                         <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>
                         <div className="flex items-center gap-2"><CalendarIcon className="h-4 w-4" />Created {format(new Date(campaign.created_at), "MMM d, yyyy")}</div>
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            // Estimate time if we have concurrent calls: assume one call initiated per second per line
+                            const m = (campaign.description || '').match(/Concurrent\s*Calls\s*:\s*(\d+)/i)
+                            const lines = m ? Math.max(1, Number((m[1] || '').trim()) || 1) : 1
+                            const contacts = Math.max(0, campaign.target_contacts ?? 0)
+                            const totalSeconds = lines > 0 ? Math.ceil(contacts / lines) : contacts
+                            const hh = Math.floor(totalSeconds / 3600)
+                            const mm = Math.floor((totalSeconds % 3600) / 60)
+                            const ss = Math.floor(totalSeconds % 60)
+                            const pad = (n: number) => n.toString().padStart(2, '0')
+                            return <span>Est. time: {hh > 0 ? `${hh}:` : ''}{pad(mm)}:{pad(ss)}</span>
+                          })()}
+                        </div>
                       </div>
                     </div>
                   ))}

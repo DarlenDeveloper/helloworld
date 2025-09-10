@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
+import { BetaCountdownModal } from "@/components/beta-countdown"
 
 // DB types (subset) aligned with simple schema
 interface DbContactBatch {
@@ -53,6 +54,16 @@ export default function WhatsAppSchedulingPage() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Under-development lock until 5 Oct 2025
+  const [locked, setLocked] = useState(true)
+  useEffect(() => {
+    const target = new Date("2025-10-05T00:00:00Z").getTime()
+    const tick = () => setLocked(Date.now() < target)
+    tick()
+    const id = setInterval(tick, 60000) // re-evaluate every minute
+    return () => clearInterval(id)
+  }, [])
 
   const [contactBatches, setContactBatches] = useState<DbContactBatch[]>([])
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null)
@@ -492,6 +503,12 @@ export default function WhatsAppSchedulingPage() {
     return (
       <div className="p-8">
         <div className="max-w-7xl mx-auto">
+        <BetaCountdownModal
+          feature="WhatsApp Scheduling"
+          target="2025-10-05T00:00:00Z"
+          title="Under Development"
+          subtitle="We’re actively building this experience. Thanks for your patience!"
+        />
           <div className="text-gray-600">Loading WhatsApp scheduling...</div>
         </div>
       </div>
@@ -501,6 +518,12 @@ export default function WhatsAppSchedulingPage() {
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
+        <BetaCountdownModal
+          feature="WhatsApp Scheduling"
+          target="2025-10-05T00:00:00Z"
+          title="Under Development"
+          subtitle="We’re actively building this experience. Thanks for your patience!"
+        />
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>

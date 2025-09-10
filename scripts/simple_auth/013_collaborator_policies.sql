@@ -96,18 +96,18 @@ DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='emails') THEN
     ALTER TABLE public.emails ENABLE ROW LEVEL SECURITY;
     PERFORM public._drop_policies('public.emails');
-    EXECUTE $$CREATE POLICY emails_read   ON public.emails FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$$;
-    EXECUTE $$CREATE POLICY emails_insert ON public.emails FOR INSERT WITH CHECK (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY emails_update ON public.emails FOR UPDATE USING (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY emails_delete ON public.emails FOR DELETE USING (auth.uid() = user_id)$$;
+    EXECUTE $p$CREATE POLICY emails_read   ON public.emails FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$p$;
+    EXECUTE $p$CREATE POLICY emails_insert ON public.emails FOR INSERT WITH CHECK (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY emails_update ON public.emails FOR UPDATE USING (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY emails_delete ON public.emails FOR DELETE USING (auth.uid() = user_id)$p$;
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='email_history') THEN
     ALTER TABLE public.email_history ENABLE ROW LEVEL SECURITY;
     PERFORM public._drop_policies('public.email_history');
-    EXECUTE $$CREATE POLICY email_history_read   ON public.email_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$$;
-    EXECUTE $$CREATE POLICY email_history_insert ON public.email_history FOR INSERT WITH CHECK (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY email_history_update ON public.email_history FOR UPDATE USING (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY email_history_delete ON public.email_history FOR DELETE USING (auth.uid() = user_id)$$;
+    EXECUTE $p$CREATE POLICY email_history_read   ON public.email_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$p$;
+    EXECUTE $p$CREATE POLICY email_history_insert ON public.email_history FOR INSERT WITH CHECK (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY email_history_update ON public.email_history FOR UPDATE USING (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY email_history_delete ON public.email_history FOR DELETE USING (auth.uid() = user_id)$p$;
   END IF;
 END $$;
 
@@ -116,18 +116,18 @@ DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='whatsapp_messages') THEN
     ALTER TABLE public.whatsapp_messages ENABLE ROW LEVEL SECURITY;
     PERFORM public._drop_policies('public.whatsapp_messages');
-    EXECUTE $$CREATE POLICY whatsapp_messages_read   ON public.whatsapp_messages FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$$;
-    EXECUTE $$CREATE POLICY whatsapp_messages_insert ON public.whatsapp_messages FOR INSERT WITH CHECK (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY whatsapp_messages_update ON public.whatsapp_messages FOR UPDATE USING (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY whatsapp_messages_delete ON public.whatsapp_messages FOR DELETE USING (auth.uid() = user_id)$$;
+    EXECUTE $p$CREATE POLICY whatsapp_messages_read   ON public.whatsapp_messages FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_messages_insert ON public.whatsapp_messages FOR INSERT WITH CHECK (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_messages_update ON public.whatsapp_messages FOR UPDATE USING (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_messages_delete ON public.whatsapp_messages FOR DELETE USING (auth.uid() = user_id)$p$;
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='whatsapp_history') THEN
     ALTER TABLE public.whatsapp_history ENABLE ROW LEVEL SECURITY;
     PERFORM public._drop_policies('public.whatsapp_history');
-    EXECUTE $$CREATE POLICY whatsapp_history_read   ON public.whatsapp_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$$;
-    EXECUTE $$CREATE POLICY whatsapp_history_insert ON public.whatsapp_history FOR INSERT WITH CHECK (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY whatsapp_history_update ON public.whatsapp_history FOR UPDATE USING (auth.uid() = user_id)$$;
-    EXECUTE $$CREATE POLICY whatsapp_history_delete ON public.whatsapp_history FOR DELETE USING (auth.uid() = user_id)$$;
+    EXECUTE $p$CREATE POLICY whatsapp_history_read   ON public.whatsapp_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE))$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_history_insert ON public.whatsapp_history FOR INSERT WITH CHECK (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_history_update ON public.whatsapp_history FOR UPDATE USING (auth.uid() = user_id)$p$;
+    EXECUTE $p$CREATE POLICY whatsapp_history_delete ON public.whatsapp_history FOR DELETE USING (auth.uid() = user_id)$p$;
   END IF;
 END $$;
 

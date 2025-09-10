@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
+import { BetaCountdownModal } from "@/components/beta-countdown"
 
 // DB types (subset) aligned with simple schema
 interface DbContactBatch {
@@ -53,6 +54,16 @@ export default function EmailSchedulingPage() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Under-development lock until 5 Oct 2025
+  const [locked, setLocked] = useState(true)
+  useEffect(() => {
+    const target = new Date("2025-10-05T00:00:00Z").getTime()
+    const tick = () => setLocked(Date.now() < target)
+    tick()
+    const id = setInterval(tick, 60000) // re-evaluate every minute
+    return () => clearInterval(id)
+  }, [])
 
   const [contactBatches, setContactBatches] = useState<DbContactBatch[]>([])
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null)
@@ -111,6 +122,13 @@ export default function EmailSchedulingPage() {
     init()
   }, [supabase, router])
 
+  const blockIfLocked = () => {
+    if (locked) {
+      alert("This feature is under development until Oct 5, 2025.")
+      return true
+    }
+    return false
+  }
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
       .from("email_contact_batches")
@@ -164,7 +182,7 @@ export default function EmailSchedulingPage() {
     setCampaigns(data as DbCampaign[] || [])
   }
 
-  const handleCreateBatch = async () => {
+  const handleCreateBatch = async () => { if (blockIfLocked()) return
     if (!user) return
     const defaultName = `New Batch ${contactBatches.length + 1}`
 
@@ -292,7 +310,7 @@ export default function EmailSchedulingPage() {
       }
 
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-      setCampaignForm({ name: "", subject: "", body: "", selectedBatches: [] })
+      setCampaignForm({ name: "", subject: "", body: "", sendIntervalSeconds: 1, selectedBatches: [] })
       setIsCreateCampaignOpen(false)
     } catch (err) {
       console.error("Error creating campaign:", err)
@@ -302,7 +320,7 @@ export default function EmailSchedulingPage() {
     }
   }
 
-  const startCampaign = async (campaignId: string) => {
+  const startCampaign = async (campaignId: string) => { if (blockIfLocked()) return;
     setStartingCampaignId(campaignId)
     setStarting(true)
     try {
@@ -332,7 +350,7 @@ export default function EmailSchedulingPage() {
   }, [selectedBatch])
 
   // CSV import support
-  const onClickImportCSV = () => fileInputRef.current?.click()
+  const onClickImportCSV = () => { if (blockIfLocked()) return; fileInputRef.current?.click() }
 
   const parseCSV = (text: string): { email: string; name?: string }[] => {
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
@@ -498,6 +516,12 @@ export default function EmailSchedulingPage() {
     return (
       <div className="p-8">
         <div className="max-w-7xl mx-auto">
+        <BetaCountdownModal
+          feature="Email Scheduling"
+          target="2025-10-05T00:00:00Z"
+          title="Under Development"
+          subtitle="We’re actively building this experience. Thanks for your patience!"
+        />
           <div className="text-gray-600">Loading Email scheduling...</div>
         </div>
       </div>
@@ -507,6 +531,12 @@ export default function EmailSchedulingPage() {
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
+        <BetaCountdownModal
+          feature="Email Scheduling"
+          target="2025-10-05T00:00:00Z"
+          title="Under Development"
+          subtitle="We’re actively building this experience. Thanks for your patience!"
+        />
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -515,12 +545,12 @@ export default function EmailSchedulingPage() {
             <p className="text-xs text-gray-500 mt-1">Dispatch interval: configurable (default 1s)</p>
           </div>
           <div className="flex gap-4">
-            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={handleCreateBatch}>
+            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={handleCreateBatch} disabled={locked}>
               <Plus className="h-4 w-4 mr-2" />
               New Batch
             </Button>
             <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
-            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={onClickImportCSV} disabled={!selectedBatch || importing}>
+            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={onClickImportCSV} disabled={locked || !selectedBatch || importing}>
               <Upload className="h-4 w-4 mr-2" />
               {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
             </Button>

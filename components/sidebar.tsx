@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect } from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, ChevronsLeft, ChevronsRight, MessageCircle, Mail } from "lucide-react"
+import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, Bell, Users, ChevronsLeft, ChevronsRight, MessageCircle, Mail } from "lucide-react"
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -34,6 +34,8 @@ export function Sidebar() {
     { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
+    { icon: Users, href: "/collaborators", label: "Collaborators", active: pathname === "/collaborators" },
+    { icon: Bell, href: "/notifications", label: "Notifications", active: pathname === "/notifications" },
     { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
     { icon: DollarSign, href: "/billing", label: "Billing", active: pathname === "/billing" },
     { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
@@ -52,12 +54,12 @@ export function Sidebar() {
 
   return (
     <div
-      className={`hidden sm:flex fixed inset-y-0 left-0 z-50 h-full flex-col bg-background p-3 shadow-md transition-all my-1 gap-0.5 ${
+      className={`flex fixed inset-y-0 left-0 z-50 h-full flex-col bg-background p-3 shadow-md transition-all my-1 gap-0.5 overflow-hidden ${
         isExpanded ? "w-64" : "w-16"
       }`}
       onClick={handleSidebarClick}
     >
-      <div className="flex flex-col space-y-6">
+      <div className="flex flex-col space-y-6 flex-1 min-h-0 overflow-y-auto">
         {/* Minimizer / Expander */}
         <div className="flex items-center justify-end">
           <button

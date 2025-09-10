@@ -23,7 +23,8 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}))
   const invitee_email = String(body?.invitee_email || "").trim().toLowerCase()
-  const role = (String(body?.role || "viewer").toLowerCase() === "editor") ? "editor" : "viewer"
+  const inputRole = String(body?.role || "").toLowerCase()
+  const role = (inputRole === "major" || inputRole === "editor") ? "editor" : "viewer" // mini/viewer => viewer; major/editor => editor
   const daysValid = Math.min(30, Math.max(1, Number(body?.days_valid || 7)))
   const expires_at = new Date(Date.now() + daysValid * 24 * 3600 * 1000).toISOString()
 

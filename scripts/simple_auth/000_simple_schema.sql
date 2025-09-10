@@ -166,40 +166,110 @@ CREATE TABLE IF NOT EXISTS public.user_login_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 3) RLS: permissive policies for authenticated users on domain tables
-DO $$
-DECLARE
-  t TEXT;
-  pol RECORD;
-BEGIN
-  FOR t IN SELECT unnest(ARRAY[
-    'public.calls',
-    'public.campaigns',
-    'public.contact_batches',
-    'public.campaign_batches',
-    'public.call_history',
-    'public.knowledge_base_articles',
-    'public.user_login_logs',
-    'public.contacts'
-  ]) LOOP
-    BEGIN
-      EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', t);
-      -- Drop existing policies to avoid duplication errors in re-runs
-      FOR pol IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename = split_part(t, '.', 2)
-      LOOP
-        EXECUTE format('DROP POLICY %I ON %s', pol.policyname, t);
-      END LOOP;
-      -- Create permissive policies
-      EXECUTE format('CREATE POLICY all_auth_read ON %s FOR SELECT USING (auth.uid() IS NOT NULL)', t);
-      EXECUTE format('CREATE POLICY all_auth_insert ON %s FOR INSERT WITH CHECK (auth.uid() IS NOT NULL)', t);
-      EXECUTE format('CREATE POLICY all_auth_update ON %s FOR UPDATE USING (auth.uid() IS NOT NULL)', t);
-      EXECUTE format('CREATE POLICY all_auth_delete ON %s FOR DELETE USING (auth.uid() IS NOT NULL)', t);
-    EXCEPTION WHEN undefined_table THEN
-      -- Table not present; skip
-      NULL;
-    END;
+-- 3) RLS: collaborator-based access across domain tables
+-- Owner-or-collaborator can read; owner can write. Owners can also
+-- read collaborators' login logs.
+
+-- Calls
+ALTER TABLE public.calls ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='calls' LOOP
+    EXECUTE format('DROP POLICY %I ON public.calls', r.policyname);
   END LOOP;
-END $$;
+END $;
+CREATE POLICY calls_read   ON public.calls FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY calls_insert ON public.calls FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY calls_update ON public.calls FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY calls_delete ON public.calls FOR DELETE USING (auth.uid() = user_id);
+
+-- Campaigns
+ALTER TABLE public.campaigns ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='campaigns' LOOP
+    EXECUTE format('DROP POLICY %I ON public.campaigns', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY campaigns_read   ON public.campaigns FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY campaigns_insert ON public.campaigns FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY campaigns_update ON public.campaigns FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY campaigns_delete ON public.campaigns FOR DELETE USING (auth.uid() = user_id);
+
+-- Contact batches
+ALTER TABLE public.contact_batches ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='contact_batches' LOOP
+    EXECUTE format('DROP POLICY %I ON public.contact_batches', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY contact_batches_read   ON public.contact_batches FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY contact_batches_insert ON public.contact_batches FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY contact_batches_update ON public.contact_batches FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY contact_batches_delete ON public.contact_batches FOR DELETE USING (auth.uid() = user_id);
+
+-- Campaign <-> Batch linking (no owner column; leave authenticated)
+ALTER TABLE public.campaign_batches ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='campaign_batches' LOOP
+    EXECUTE format('DROP POLICY %I ON public.campaign_batches', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY campaign_batches_read   ON public.campaign_batches FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY campaign_batches_insert ON public.campaign_batches FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY campaign_batches_update ON public.campaign_batches FOR UPDATE USING (auth.uid() IS NOT NULL);
+CREATE POLICY campaign_batches_delete ON public.campaign_batches FOR DELETE USING (auth.uid() IS NOT NULL);
+
+-- Call history
+ALTER TABLE public.call_history ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='call_history' LOOP
+    EXECUTE format('DROP POLICY %I ON public.call_history', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY call_history_read   ON public.call_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY call_history_insert ON public.call_history FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY call_history_update ON public.call_history FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY call_history_delete ON public.call_history FOR DELETE USING (auth.uid() = user_id);
+
+-- Knowledge base articles
+ALTER TABLE public.knowledge_base_articles ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='knowledge_base_articles' LOOP
+    EXECUTE format('DROP POLICY %I ON public.knowledge_base_articles', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY kba_read   ON public.knowledge_base_articles FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY kba_insert ON public.knowledge_base_articles FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY kba_update ON public.knowledge_base_articles FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY kba_delete ON public.knowledge_base_articles FOR DELETE USING (auth.uid() = user_id);
+
+-- Contacts
+ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='contacts' LOOP
+    EXECUTE format('DROP POLICY %I ON public.contacts', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY contacts_read   ON public.contacts FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY contacts_insert ON public.contacts FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY contacts_update ON public.contacts FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY contacts_delete ON public.contacts FOR DELETE USING (auth.uid() = user_id);
+
+-- User login logs: allow self, and owners to see collaborator logs
+ALTER TABLE public.user_login_logs ENABLE ROW LEVEL SECURITY;
+DO $ DECLARE r RECORD; BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='user_login_logs' LOOP
+    EXECUTE format('DROP POLICY %I ON public.user_login_logs', r.policyname);
+  END LOOP;
+END $;
+CREATE POLICY ull_read   ON public.user_login_logs FOR SELECT USING (
+  auth.uid() = user_id OR EXISTS (
+    SELECT 1 FROM public.user_collaborators c
+    WHERE c.owner_user_id = auth.uid() AND c.collaborator_user_id = user_id
+  )
+);
+CREATE POLICY ull_insert ON public.user_login_logs FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY ull_update ON public.user_login_logs FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY ull_delete ON public.user_login_logs FOR DELETE USING (auth.uid() = user_id);
 
 -- 4) Helpful indexes
 CREATE INDEX IF NOT EXISTS idx_calls_created_at ON public.calls(created_at DESC);

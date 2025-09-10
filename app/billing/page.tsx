@@ -38,6 +38,8 @@ const packages = [
 ]
 
 export default function BillingPage() {
+  const supabase = createClient()
+  const [accessAllowed, setAccessAllowed] = useState<boolean | null>(null)
   const [currentPackage, setCurrentPackage] = useState("payg")
   const [remainingMinutes, setRemainingMinutes] = useState(150)
   const [customMinutes, setCustomMinutes] = useState("")
@@ -62,6 +64,34 @@ export default function BillingPage() {
   const minutesProgress = currentPlan?.minutes ? (remainingMinutes / currentPlan.minutes) * 100 : 0
 
   const renewalDate = new Date()
+
+  // Gate access: owner or major collaborator (editor)
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) { setAccessAllowed(false); return }
+        // If user is an owner in any row (they won't appear as collaborator_user_id), allow by default
+        // Otherwise, if they are collaborator on someone else's account, they will have rows where collaborator_user_id = user.id
+        const { data: collRows, error } = await supabase
+          .from("user_collaborators")
+          .select("owner_user_id, collaborator_user_id, role")
+          .eq("collaborator_user_id", user.id)
+        if (error) { setAccessAllowed(false); return }
+        if (!collRows || collRows.length === 0) {
+          // Treat as owner context
+          setAccessAllowed(true)
+          return
+        }
+        // Collaborator context: require at least one editor (major)
+        const major = (collRows as any[]).some((r) => r.role === "editor")
+        setAccessAllowed(major)
+      } catch {
+        setAccessAllowed(false)
+      }
+    }
+    run()
+  }, [supabase])
   renewalDate.setMonth(renewalDate.getMonth() + 1)
 
   const toggleSection = (section: string) => {
@@ -100,6 +130,23 @@ export default function BillingPage() {
     setCurrentPackage(selectedPackage)
     setShowPackageModal(false)
     setSelectedPackage("")
+  }
+
+  if (accessAllowed === null) {
+    return <div className="p-6 min-h-screen bg-white flex items-center justify-center text-gray-600">Checking access...</div>
+  }
+
+  if (!accessAllowed) {
+    return (
+      <div className="p-6 min-h-screen bg-white flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle>Not authorized</CardTitle>
+            <CardDescription>Only the owner or a major collaborator can access billing and subscriptions.</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    )
   }
 
   if (showPaymentGateway) {

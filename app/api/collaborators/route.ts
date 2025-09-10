@@ -37,7 +37,8 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ success: true })
   }
 
-  const role = (String(body?.role || "viewer").toLowerCase() === "editor") ? "editor" : "viewer"
+  const inputRole = String(body?.role || "").toLowerCase()
+  const role = (inputRole === "major" || inputRole === "editor") ? "editor" : "viewer"
   const { error } = await supabase
     .from("user_collaborators")
     .update({ role })

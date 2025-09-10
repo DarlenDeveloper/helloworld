@@ -46,7 +46,7 @@ ALTER TABLE public.user_collaboration_invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_collaborators ENABLE ROW LEVEL SECURITY;
 
 -- Policies for invitations
-DO $$ BEGIN
+DO $ BEGIN
   -- Drop previous if exist
   PERFORM 1;
   BEGIN
@@ -58,7 +58,10 @@ DO $$ BEGIN
   BEGIN
     DROP POLICY IF EXISTS inv_all_auth_insert ON public.user_collaboration_invitations;
   EXCEPTION WHEN undefined_object THEN NULL; END;
-END $$;
+  BEGIN
+    DROP POLICY IF EXISTS inv_invitee_accept_update ON public.user_collaboration_invitations;
+  EXCEPTION WHEN undefined_object THEN NULL; END;
+END $;
 
 -- Owner can read/write their invitations
 CREATE POLICY inv_owner_rw ON public.user_collaboration_invitations
@@ -73,6 +76,18 @@ CREATE POLICY inv_invitee_read ON public.user_collaboration_invitations
   USING (
     status = 'pending'::public.invitation_status AND
     lower(invitee_email) = lower(COALESCE((auth.jwt() ->> 'email')::text, ''))
+  );
+
+-- Invitee can accept their own pending invitation (update status to accepted)
+CREATE POLICY inv_invitee_accept_update ON public.user_collaboration_invitations
+  FOR UPDATE
+  USING (
+    status = 'pending'::public.invitation_status
+    AND lower(invitee_email) = lower(COALESCE((auth.jwt() ->> 'email')::text, ''))
+  )
+  WITH CHECK (
+    lower(invitee_email) = lower(COALESCE((auth.jwt() ->> 'email')::text, ''))
+    AND status = 'accepted'::public.invitation_status
   );
 
 -- Policies for collaborators

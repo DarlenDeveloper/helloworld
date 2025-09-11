@@ -1,6 +1,10 @@
 "use client"
 
-import { useState } from "react"
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
+
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -29,6 +33,7 @@ import {
   Edit,
   Calendar,
 } from "lucide-react"
+import { createClient } from "@/lib/supabase/client"
 
 const packages = [
   { id: "starter", name: "Starter", price: 481000, agents: 2, minutes: 300 },
@@ -38,7 +43,7 @@ const packages = [
 ]
 
 export default function BillingPage() {
-  const supabase = createClient()
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null)
   const [accessAllowed, setAccessAllowed] = useState<boolean | null>(null)
   const [currentPackage, setCurrentPackage] = useState("payg")
   const [remainingMinutes, setRemainingMinutes] = useState(150)
@@ -67,23 +72,24 @@ export default function BillingPage() {
 
   // Gate access: owner or major collaborator (editor)
   useEffect(() => {
+    if (!supabaseRef.current) {
+      supabaseRef.current = createClient()
+    }
+    const supabase = supabaseRef.current
+
     const run = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser()
+        const { data: { user } } = await supabase!.auth.getUser()
         if (!user) { setAccessAllowed(false); return }
-        // If user is an owner in any row (they won't appear as collaborator_user_id), allow by default
-        // Otherwise, if they are collaborator on someone else's account, they will have rows where collaborator_user_id = user.id
-        const { data: collRows, error } = await supabase
+        const { data: collRows, error } = await supabase!
           .from("user_collaborators")
           .select("owner_user_id, collaborator_user_id, role")
           .eq("collaborator_user_id", user.id)
         if (error) { setAccessAllowed(false); return }
         if (!collRows || collRows.length === 0) {
-          // Treat as owner context
           setAccessAllowed(true)
           return
         }
-        // Collaborator context: require at least one editor (major)
         const major = (collRows as any[]).some((r) => r.role === "editor")
         setAccessAllowed(major)
       } catch {
@@ -91,10 +97,11 @@ export default function BillingPage() {
       }
     }
     run()
-  }, [supabase])
+  }, [])
   renewalDate.setMonth(renewalDate.getMonth() + 1)
 
-  const toggleSection = (section: string) => {
+  type SectionKey = 'minutes' | 'package' | 'payment'
+  const toggleSection = (section: SectionKey) => {
     setExpandedSections((prev) => ({
       ...prev,
       [section]: !prev[section],

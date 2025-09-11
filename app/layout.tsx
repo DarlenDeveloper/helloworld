@@ -6,6 +6,10 @@ import "./globals.css"
 import { ClientSidebar } from "@/components/client-sidebar"
 import { ContentContainer } from "@/components/content-container"
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
+
 export const metadata: Metadata = {
   title: "AI Agent Dashboard",
   description: "AI Customer Service Agent Management Platform",

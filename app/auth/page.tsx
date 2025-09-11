@@ -26,23 +26,16 @@ export default function Auth() {
   const router = useRouter()
   const supabase = createClient()
 
-  // Log successful login to user_login_logs
+  // Log successful login to user_login_logs (optimized - no external API call)
   const logSuccessfulLogin = async (userId: string, emailAddr: string) => {
     try {
-      let ip: string | null = null
-      try {
-        const resp = await fetch("https://api.ipify.org?format=json")
-        if (resp.ok) {
-          const j = await resp.json()
-          ip = j.ip || null
-        }
-      } catch {}
       const ua = typeof navigator !== "undefined" ? navigator.userAgent : null
+      // Skip IP lookup for performance - can be done server-side if needed
       await supabase.from("user_login_logs").insert({
         user_id: userId,
         email: emailAddr,
         status: "success",
-        ip_address: ip,
+        ip_address: null, // Can be populated server-side if needed
         user_agent: ua,
       })
     } catch {}

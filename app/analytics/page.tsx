@@ -1,6 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
+
+import { useEffect, useRef, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Calendar, Download, FileText, ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -26,7 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function AnalyticsPage() {
-  const supabase = createClient()
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null)
   const [selectedDateRange, setSelectedDateRange] = useState<Date[]>([])
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [showModal, setShowModal] = useState(false)
@@ -38,9 +42,19 @@ export default function AnalyticsPage() {
   const [talkingPointsData, setTalkingPointsData] = useState<TalkingPointDatum[]>([])
 
   useEffect(() => {
+    // Create the Supabase client only on the client
+    if (!supabaseRef.current) {
+      supabaseRef.current = createClient()
+    }
+    const supabase = supabaseRef.current
+    if (!supabase) return
+
     let unsubscribe: (() => void) | undefined
+
     const run = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
       if (!user) return
       if (selectedDateRange.length < 2) return
 
@@ -97,7 +111,8 @@ export default function AnalyticsPage() {
           console.error("Status breakdown fetch error (calls):", callsErr)
           setFollowUpData([])
         } else {
-          let completed = 0, missed = 0
+          let completed = 0,
+            missed = 0
           ;(callsRows || []).forEach((r: any) => {
             if (r.status === "completed") completed++
             else if (r.status === "missed") missed++
@@ -155,7 +170,7 @@ export default function AnalyticsPage() {
     return () => {
       if (unsubscribe) unsubscribe()
     }
-  }, [supabase, selectedDateRange])
+  }, [selectedDateRange])
 
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear()

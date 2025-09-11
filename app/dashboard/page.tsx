@@ -125,92 +125,110 @@ export default function Dashboard() {
   useEffect(() => {
     let callsSub: RealtimeChannel | null = null
     let historySub: RealtimeChannel | null = null
-    const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push("/login")
-        return
-      }
-      setUser(user)
-      await fetchData()
-      callsSub = supabase
-        .channel('calls-changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, () => { fetchData() })
-        .subscribe()
-      historySub = supabase
-        .channel('call-history-changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'call_history' }, () => { fetchData() })
-        .subscribe()
-      setLoading(false)
+    let debounceTimer: NodeJS.Timeout | null = null
+
+    const debouncedFetchData = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        fetchData()
+      }, 500) // Debounce real-time updates by 500ms
     }
+
+    const init = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          router.push("/login")
+          return
+        }
+        setUser(user)
+        await fetchData()
+        
+        // Only subscribe to essential updates
+        callsSub = supabase
+          .channel('calls-changes')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, debouncedFetchData)
+          .subscribe()
+      } catch (error) {
+        console.error("Dashboard initialization error:", error)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
     init()
+    
     return () => {
       if (callsSub) supabase.removeChannel(callsSub)
       if (historySub) supabase.removeChannel(historySub)
+      if (debounceTimer) clearTimeout(debounceTimer)
     }
   }, [router, supabase])
 
   const fetchData = async () => {
     try {
-      // Fetch calls (global, no org filter)
-      const { data: callsData, error: callsError } = await supabase
-        .from("calls")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(10)
+      // Use Promise.allSettled for parallel requests that won't fail the entire operation
+      const results = await Promise.allSettled([
+        // Fetch recent calls with minimal data
+        supabase
+          .from("calls")
+          .select("id, customer_name, customer_phone, call_type, status, duration, notes, created_at")
+          .order("created_at", { ascending: false })
+          .limit(10),
+        
+        // Fetch call stats in single optimized query
+        supabase
+          .from("calls")
+          .select("call_type, status")
+          .limit(1000), // Reasonable limit for stats
+        
+        // Fetch campaigns with minimal data
+        supabase
+          .from("campaigns")
+          .select("id, name, status, target_contacts, completed_calls, success_rate, created_at")
+          .order("created_at", { ascending: false })
+          .limit(50),
+        
+        // Fetch call history summary data only
+        supabase
+          .from("call_history")
+          .select("duration, cost, ai_summary, notes, call_date")
+          .order("call_date", { ascending: false })
+          .limit(500) // Limit for performance
+      ])
 
-      if (callsError) {
-        console.error("Error fetching calls:", callsError)
-      } else {
-        setCalls((callsData as Call[]) || [])
+      // Handle calls data
+      if (results[0].status === 'fulfilled' && !results[0].value.error) {
+        setCalls((results[0].value.data as Call[]) || [])
       }
 
-      // Compute inbound/outbound stats by filtering at DB level
-      const { data: inboundRows, error: inboundErr } = await supabase
-        .from("calls")
-        .select("status")
-        .eq("call_type", "inbound")
-
-      const { data: outboundRows, error: outboundErr } = await supabase
-        .from("calls")
-        .select("status")
-        .eq("call_type", "outbound")
-
-      if (inboundErr || outboundErr) {
-        console.error("Error fetching call stats by type:", inboundErr || outboundErr)
-      } else {
-        const inboundStatuses = (inboundRows || []).map((r: any) => r.status as string)
-        const outboundStatuses = (outboundRows || []).map((r: any) => r.status as string)
+      // Handle call stats
+      if (results[1].status === 'fulfilled' && !results[1].value.error) {
+        const callStatsData = results[1].value.data || []
+        const inboundStatuses = callStatsData.filter((r: any) => r.call_type === 'inbound').map((r: any) => r.status)
+        const outboundStatuses = callStatsData.filter((r: any) => r.call_type === 'outbound').map((r: any) => r.status)
         calculateCallStats(inboundStatuses, outboundStatuses)
       }
 
-      // Fetch campaigns (global, no org filter)
-      const { data: campaignsData, error: campaignsError } = await supabase
-        .from("campaigns")
-        .select("*")
-        .order("created_at", { ascending: false })
-
-      if (campaignsError) {
-        console.error("Error fetching campaigns:", campaignsError)
-      } else {
-        setCampaigns((campaignsData as Campaign[]) || [])
-      }
-      
-      // Fetch call metrics from call_history (global, no org filter)
-      const { data: callHistoryData, error: callHistoryError } = await supabase
-        .from("call_history")
-        .select("*")
-      
-      if (callHistoryError) {
-        console.error("Error fetching call history:", callHistoryError)
-      } else {
-        calculateCallMetrics((callHistoryData as CallHistory[]) || [])
-        calculateTalkingPoints((callHistoryData as CallHistory[]) || [])
+      // Handle campaigns
+      if (results[2].status === 'fulfilled' && !results[2].value.error) {
+        setCampaigns((results[2].value.data as Campaign[]) || [])
       }
 
-      return () => {
-        supabase.removeChannel(callsSubscription)
+      // Handle call history
+      if (results[3].status === 'fulfilled' && !results[3].value.error) {
+        const historyData = results[3].value.data as CallHistory[] || []
+        calculateCallMetrics(historyData)
+        calculateTalkingPoints(historyData)
       }
+
+      // Log any failed requests
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Database query ${index + 1} failed:`, result.reason)
+        }
+      })
+
     } catch (error) {
       console.error("Error fetching data:", error)
     }

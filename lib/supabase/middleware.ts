@@ -6,6 +6,27 @@ export async function updateSession(request: NextRequest) {
     request,
   })
 
+  const path = request.nextUrl.pathname
+  const isAuthRoute = path.startsWith("/auth") || path.startsWith("/login") || path.startsWith("/sign-up")
+  const isApiRoute = path.startsWith("/api")
+
+  // Skip auth check for API routes and static assets - they handle auth separately
+  if (isApiRoute) {
+    return supabaseResponse
+  }
+
+  // Check if we have auth tokens in cookies first (faster than API call)
+  const accessToken = request.cookies.get("sb-access-token")
+  const refreshToken = request.cookies.get("sb-refresh-token")
+  
+  // If no tokens at all, redirect to auth immediately
+  if (!accessToken && !refreshToken && !isAuthRoute) {
+    const url = request.nextUrl.clone()
+    url.pathname = "/auth"
+    return NextResponse.redirect(url)
+  }
+
+  // If we have tokens or are on auth route, create client and verify
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -28,10 +49,6 @@ export async function updateSession(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-
-
-  const path = request.nextUrl.pathname
-  const isAuthRoute = path.startsWith("/auth") || path.startsWith("/login") || path.startsWith("/sign-up")
 
   if (!user && !isAuthRoute) {
     const url = request.nextUrl.clone()

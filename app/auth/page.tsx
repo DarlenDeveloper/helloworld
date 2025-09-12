@@ -26,18 +26,10 @@ export default function Auth() {
   const router = useRouter()
   const supabase = createClient()
 
-  // Log successful login to user_login_logs (optimized - no external API call)
-  const logSuccessfulLogin = async (userId: string, emailAddr: string) => {
+  // Log successful login without client-derived IP; server will enrich IP & device
+  const logSuccessfulLogin = async () => {
     try {
-      const ua = typeof navigator !== "undefined" ? navigator.userAgent : null
-      // Skip IP lookup for performance - can be done server-side if needed
-      await supabase.from("user_login_logs").insert({
-        user_id: userId,
-        email: emailAddr,
-        status: "success",
-        ip_address: null, // Can be populated server-side if needed
-        user_agent: ua,
-      })
+      await fetch("/api/auth/login-log", { method: "POST" })
     } catch {}
   }
 
@@ -55,7 +47,7 @@ export default function Auth() {
       if (error) {
         setError(error.message)
       } else if (data.user) {
-        await logSuccessfulLogin(data.user.id, data.user.email ?? email)
+        await logSuccessfulLogin()
         router.push("/dashboard")
         router.refresh()
       }

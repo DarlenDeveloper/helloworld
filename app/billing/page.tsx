@@ -1,8 +1,6 @@
 "use client"
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
+/* using app-level route segment config from layout */
 
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"

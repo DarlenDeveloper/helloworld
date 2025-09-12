@@ -138,12 +138,14 @@ export default function Dashboard() {
       try {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) {
-          router.push("/login")
+          // Middleware guards routes; avoid client redirects to prevent loops.
+          // Also stop the spinner if the user isn't authenticated.
+          setLoading(false)
           return
         }
         setUser(user)
         await fetchData()
-        
+
         // Only subscribe to essential updates
         callsSub = supabase
           .channel('calls-changes')
@@ -236,7 +238,7 @@ export default function Dashboard() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    router.push("/login")
+    router.push("/auth")
   }
 
   // Calculate call statistics from calls data

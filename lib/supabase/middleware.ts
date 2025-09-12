@@ -15,16 +15,8 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Check if we have auth tokens in cookies first (faster than API call)
-  const accessToken = request.cookies.get("sb-access-token")
-  const refreshToken = request.cookies.get("sb-refresh-token")
-  
-  // If no tokens at all, redirect to auth immediately
-  if (!accessToken && !refreshToken && !isAuthRoute) {
-    const url = request.nextUrl.clone()
-    url.pathname = "/auth"
-    return NextResponse.redirect(url)
-  }
+  // Always verify via Supabase (do not assume cookie names exist).
+  // Some environments/browsers may store tokens under different names.
 
   // If we have tokens or are on auth route, create client and verify
   const supabase = createServerClient(
@@ -56,10 +48,10 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  // Allow authenticated users to remain on auth routes (avoid redirect loops).
+  // The app/pages can handle post-login navigation.
   if (user && isAuthRoute) {
-    const url = request.nextUrl.clone()
-    url.pathname = "/dashboard"
-    return NextResponse.redirect(url)
+    return supabaseResponse
   }
 
   return supabaseResponse

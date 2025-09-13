@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Calendar, Search } from "lucide-react"
+import { Calendar, Search, Bell } from "lucide-react"
 import { DayPicker } from "react-day-picker"
 import "react-day-picker/dist/style.css"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -161,11 +162,30 @@ export default function WebFormsPage() {
     })
   }, [rows, searchTerm, selectedForm, selectedRange])
 
+  const newCount = useMemo(() => {
+    const now = Date.now()
+    const dayAgo = now - 24 * 60 * 60 * 1000
+    return rows.filter((r: WebFormRecord) => {
+      const ts = new Date(r.submitted_at || r.created_at || Date.now()).getTime()
+      return ts >= dayAgo
+    }).length
+  }, [rows])
+
   return (
     <div className="ml-20 p-6 bg-white min-h-screen">
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-black">Web Forms</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-black">Web Forms</h1>
+          <div className="flex items-center">
+            <Bell className="h-5 w-5 text-gray-600" />
+            {newCount > 0 && (
+              <span className="ml-1">
+                <Badge variant="outline" className="border-teal-300 text-teal-700 bg-teal-50">{newCount}</Badge>
+              </span>
+            )}
+          </div>
+        </div>
 
         <Dialog open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
           <DialogTrigger asChild>

@@ -84,6 +84,13 @@ export default function SchedulingPage() {
     { name: "", phone: "", email: "", notes: "" }
   )
 
+  const phoneValidation = useMemo(() => {
+    const raw = manualContact.phone.trim()
+    if (!raw) return { valid: false, normalized: "", touched: false }
+    const normalized = normalizePhone(raw)
+    return { valid: isValidE164(normalized), normalized, touched: true }
+  }, [manualContact.phone])
+
   // Derived map for quick lookups
   const batchMap = useMemo(() => {
     const m = new Map<string, DbContactBatch>()
@@ -326,25 +333,44 @@ export default function SchedulingPage() {
   // CSV import support
   const onClickImportCSV = () => fileInputRef.current?.click()
 
-  const parseCSV = (text: string): { phone: string; notes: string }[] => {
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    if (lines.length === 0) return []
+  const normalizePhone = (raw: string) => {
+    let s = (raw || "").trim()
+    // remove common separators/spaces
+    s = s.replace(/[\s\-().]/g, "")
+    // convert leading 00 to +
+    if (s.startsWith("00")) s = "+" + s.slice(2)
+    // if no + but only digits and plausible length, prefix +
+    if (!s.startsWith("+") && /^\d{8,15}$/.test(s)) s = "+" + s
+    return s
+  }
 
-    // Detect header
-    const hasHeader = /(^|,)\s*contact\s*(,|$)/i.test(lines[0])
+  const isValidE164 = (phone: string) => /^\+[1-9]\d{7,14}$/.test(phone)
+
+  type ParsedPhones = { valid: { phone: string; notes: string }[]; invalid: string[] }
+
+  const parseCSV = (text: string): ParsedPhones => {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (lines.length === 0) return { valid: [], invalid: [] }
+
+    // Detect header (contact/phone/number in first column)
+    const hasHeader = /(^|,)\s*(contact|phone|number)\s*(,|$)/i.test(lines[0])
     const rows = hasHeader ? lines.slice(1) : lines
 
-    const out: { phone: string; notes: string }[] = []
+    const valid: { phone: string; notes: string }[] = []
+    const invalid: string[] = []
     for (const line of rows) {
       const parts = line.split(",")
-      const phone = (parts[0] || "").trim()
+      const phoneRaw = (parts[0] || "").trim()
       const notes = (parts[1] || "").trim()
-      if (!phone) continue
-      // light validation: start with + and at least 8 digits overall
-      if (!/^\+?[0-9]{8,}$/.test(phone.replace(/\s+/g, ""))) continue
-      out.push({ phone, notes })
+      if (!phoneRaw) continue
+      const phone = normalizePhone(phoneRaw)
+      if (!isValidE164(phone)) {
+        invalid.push(phoneRaw)
+        continue
+      }
+      valid.push({ phone, notes })
     }
-    return out
+    return { valid, invalid }
   }
 
   const chunk = <T,>(arr: T[], size: number): T[][] => {
@@ -362,7 +388,11 @@ export default function SchedulingPage() {
     try {
       const text = await file.text()
       const parsed = parseCSV(text)
-      const uniqueByPhone = Array.from(new Map(parsed.map((r) => [r.phone, r])).values())
+      if (parsed.invalid.length > 0) {
+        const sample = parsed.invalid.slice(0, 10).join(", ")
+        alert(`Invalid phone numbers skipped (${parsed.invalid.length}): ${sample}${parsed.invalid.length > 10 ? "..." : ""}`)
+      }
+      const uniqueByPhone = Array.from(new Map(parsed.valid.map((r) => [r.phone, r])).values())
       if (uniqueByPhone.length === 0) {
         alert("No valid contacts found in CSV.")
         return
@@ -441,9 +471,10 @@ export default function SchedulingPage() {
 
   const handleAddContact = async () => {
     if (!user || !selectedBatch) return
-    const phone = manualContact.phone.trim()
-    if (!/^\+?[0-9]{8,}$/.test(phone.replace(/\s+/g, ""))) {
-      alert("Enter a valid phone number (start with + and at least 8 digits)")
+    const raw = manualContact.phone.trim()
+    const normalized = normalizePhone(raw)
+    if (!isValidE164(normalized)) {
+      alert("Enter a valid phone number in E.164 format (e.g., +256778825312)")
       return
     }
 
@@ -454,7 +485,7 @@ export default function SchedulingPage() {
           user_id: user.id,
           name: manualContact.name.trim() || null,
           email: manualContact.email.trim() || null,
-          phone,
+          phone: normalized,
           notes: manualContact.notes.trim() || null,
         })
         .select("id")
@@ -468,7 +499,7 @@ export default function SchedulingPage() {
 
       const { error: linkErr } = await supabase
         .from("batch_contacts")
-        .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email: manualContact.email || null, phone, notes: manualContact.notes || null })
+        .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email: manualContact.email || null, phone: normalized, notes: manualContact.notes || null })
       if (linkErr) {
         console.error("Failed linking contact to batch:", linkErr)
         alert("Failed to link contact to batch")
@@ -626,6 +657,9 @@ export default function SchedulingPage() {
                             <div>
                               <Label htmlFor="add-phone">Phone *</Label>
                               <Input id="add-phone" value={manualContact.phone} onChange={(e) => setManualContact((p) => ({ ...p, phone: e.target.value }))} placeholder="e.g., +256778825312" />
+                              {manualContact.phone && !phoneValidation.valid && (
+                                <div className="text-xs text-red-600 mt-1">Invalid phone. Use E.164 format, e.g., +256778825312</div>
+                              )}
                             </div>
                             <div>
                               <Label htmlFor="add-email">Email (optional)</Label>
@@ -637,7 +671,7 @@ export default function SchedulingPage() {
                             </div>
                             <div className="flex justify-end gap-2">
                               <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>Cancel</Button>
-                              <Button onClick={handleAddContact} className="bg-teal-500 hover:bg-teal-600">Add</Button>
+                              <Button onClick={handleAddContact} className="bg-teal-500 hover:bg-teal-600" disabled={!phoneValidation.valid}>Add</Button>
                             </div>
                           </div>
                         </DialogContent>

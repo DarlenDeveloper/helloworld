@@ -1,5 +1,4 @@
 "use client"
-import type React from "react"
 
 import { useEffect, useMemo, useState } from "react"
 import { Calendar, Search } from "lucide-react"
@@ -14,7 +13,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 
 type WebFormRecord = {
   id: string
-  organization_id: string | null
   form_name: string | null
   name: string | null
   email: string | null
@@ -45,7 +43,6 @@ export default function WebFormsPage() {
   const [rows, setRows] = useState<WebFormRecord[]>([])
   const [fetchError, setFetchError] = useState<string | null>(null)
 
-  const [orgId, setOrgId] = useState<string | null>(null)
 
   function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x }
   function endOfDay(d: Date) { const x = new Date(d); x.setHours(23,59,59,999); return x }
@@ -99,36 +96,15 @@ export default function WebFormsPage() {
         return
       }
 
-      // Resolve organization for current user
-      const { data: membershipRows, error: memErr } = await supabase
-        .from("organization_members")
-        .select("organization_id, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
+      const uid = user.id
+      await fetchFormsAndOptions(uid)
 
-      if (memErr) {
-        setFetchError("Failed to resolve organization")
-        return
-      }
-      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-      if (!membership) {
-        setFetchError("No organization found for user")
-        return
-      }
-
-      const org = membership.organization_id
-      setOrgId(org)
-
-      await fetchFormsAndOptions(org)
-
-      // Real-time subscription scoped by organization_id
       const subscription = supabase
-        .channel("org:web_forms")
+        .channel("web_forms_changes")
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "web_forms", filter: `organization_id=eq.${org}` },
-          () => { fetchFormsAndOptions(org) }
+          { event: "*", schema: "public", table: "web_forms", filter: `user_id=eq.${uid}` },
+          () => { fetchFormsAndOptions(uid) }
         )
         .subscribe()
 
@@ -140,12 +116,12 @@ export default function WebFormsPage() {
     init()
   }, [supabase])
 
-  const fetchFormsAndOptions = async (org: string) => {
+  const fetchFormsAndOptions = async (uid: string) => {
     try {
       const { data, error } = await supabase
         .from("web_forms")
         .select("*")
-        .eq("organization_id", org)
+        .eq("user_id", uid)
         .order("submitted_at", { ascending: false })
         .limit(500)
 
@@ -240,7 +216,7 @@ export default function WebFormsPage() {
           <Input
             placeholder="Search name, email, phone, or message..."
             value={searchTerm}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
+            onChange={(e: any) => setSearchTerm(e.target.value)}
             className="pl-10"
           />
         </div>

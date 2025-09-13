@@ -1,190 +1,312 @@
 "use client"
+import type React from "react"
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useEffect, useMemo, useState } from "react"
+import { Calendar, Search } from "lucide-react"
+import { DayPicker } from "react-day-picker"
+import "react-day-picker/dist/style.css"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
-type FormState = {
-  name: string
-  phone: string
-  email: string
-  country: string
-  message: string
+type WebFormRecord = {
+  id: string
+  organization_id: string | null
+  form_name: string | null
+  name: string | null
+  email: string | null
+  phone: string | null
+  message: string | null
+  submitted_at: string | null
+  created_at: string | null
+  metadata?: Record<string, any> | null
 }
 
-export default function ContactFormPage() {
+export default function WebFormsPage() {
   const supabase = createClient()
-  const router = useRouter()
-  const [checkingAuth, setCheckingAuth] = useState(true)
-  const [submitting, setSubmitting] = useState(false)
-  const [successMsg, setSuccessMsg] = useState<string | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [form, setForm] = useState<FormState>({
-    name: "",
-    phone: "",
-    email: "",
-    country: "",
-    message: "",
+
+  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedForm, setSelectedForm] = useState("all")
+  const [formOptions, setFormOptions] = useState<string[]>(["all"])
+  const [selectedRange, setSelectedRange] = useState<{ from?: Date; to?: Date }>(() => {
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - 6)
+    start.setHours(0, 0, 0, 0)
+    end.setHours(23, 59, 59, 999)
+    return { from: start, to: end }
   })
+  const [rangeLabel, setRangeLabel] = useState("Last 7 days")
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
+
+  const [rows, setRows] = useState<WebFormRecord[]>([])
+  const [fetchError, setFetchError] = useState<string | null>(null)
+
+  const [orgId, setOrgId] = useState<string | null>(null)
+
+  function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x }
+  function endOfDay(d: Date) { const x = new Date(d); x.setHours(23,59,59,999); return x }
+  function formatDate(d: Date) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }
+  function applyPreset(preset: 'today' | 'last7' | 'thisMonth' | 'lastMonth' | 'all') {
+    const now = new Date()
+    if (preset === 'today') {
+      const from = startOfDay(now)
+      const to = endOfDay(now)
+      setSelectedRange({ from, to })
+      setRangeLabel('Today')
+    } else if (preset === 'last7') {
+      const to = endOfDay(now)
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6))
+      setSelectedRange({ from, to })
+      setRangeLabel('Last 7 days')
+    } else if (preset === 'thisMonth') {
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1))
+      const to = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+      setSelectedRange({ from, to })
+      setRangeLabel('This month')
+    } else if (preset === 'lastMonth') {
+      const from = startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+      const to = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0))
+      setSelectedRange({ from, to })
+      setRangeLabel('Last month')
+    } else {
+      setSelectedRange({})
+      setRangeLabel('All time')
+    }
+    setIsCalendarOpen(false)
+  }
+  function applyRange() {
+    if (selectedRange.from && selectedRange.to) {
+      setRangeLabel(`${formatDate(selectedRange.from)} - ${formatDate(selectedRange.to)}`)
+    } else {
+      setRangeLabel('All time')
+    }
+    setIsCalendarOpen(false)
+  }
 
   useEffect(() => {
     const init = async () => {
-      try {
-        const { data: { user }, error } = await supabase.auth.getUser()
-        if (error) throw error
-        if (!user) {
-          router.push("/auth")
-          return
-        }
-      } catch (e) {
-        console.error("Auth check failed:", e)
-        router.push("/auth")
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
+
+      if (userError || !user) {
+        setFetchError("User not authenticated")
         return
-      } finally {
-        setCheckingAuth(false)
+      }
+
+      // Resolve organization for current user
+      const { data: membershipRows, error: memErr } = await supabase
+        .from("organization_members")
+        .select("organization_id, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true })
+        .limit(1)
+
+      if (memErr) {
+        setFetchError("Failed to resolve organization")
+        return
+      }
+      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
+      if (!membership) {
+        setFetchError("No organization found for user")
+        return
+      }
+
+      const org = membership.organization_id
+      setOrgId(org)
+
+      await fetchFormsAndOptions(org)
+
+      // Real-time subscription scoped by organization_id
+      const subscription = supabase
+        .channel("org:web_forms")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "web_forms", filter: `organization_id=eq.${org}` },
+          () => { fetchFormsAndOptions(org) }
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(subscription)
       }
     }
+
     init()
-  }, [supabase, router])
+  }, [supabase])
 
-  const isValidEmail = (email: string) => /^\S+@\S+\.[\w-]+$/.test(email)
-  const isValidPhone = (phone: string) => /^\+?[0-9]{8,}$/.test(phone.replace(/\s+/g, ""))
-
-  const onChange = (key: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setForm((prev) => ({ ...prev, [key]: e.target.value }))
-  }
-
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSuccessMsg(null)
-    setErrorMsg(null)
-
-    const name = form.name.trim()
-    const phone = form.phone.trim()
-    const email = form.email.trim()
-    const country = form.country.trim()
-    const message = form.message.trim()
-
-    if (!email && !phone) {
-      setErrorMsg("Provide at least Email or Phone.")
-      return
-    }
-    if (email && !isValidEmail(email)) {
-      setErrorMsg("Enter a valid email address.")
-      return
-    }
-    if (phone && !isValidPhone(phone)) {
-      setErrorMsg("Enter a valid phone number (start with + and at least 8 digits).")
-      return
-    }
-
-    setSubmitting(true)
+  const fetchFormsAndOptions = async (org: string) => {
     try {
-      const res = await fetch("/api/contacts-intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, email, country, message }),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(j.error || `Failed to submit (${res.status})`)
+      const { data, error } = await supabase
+        .from("web_forms")
+        .select("*")
+        .eq("organization_id", org)
+        .order("submitted_at", { ascending: false })
+        .limit(500)
+
+      if (error) {
+        console.error("Error fetching web forms:", JSON.stringify(error, null, 2))
+        setFetchError("Failed to fetch web forms data. Please try again later.")
+      } else {
+        const list = (data || []) as WebFormRecord[]
+        setRows(list)
+        const names = Array.from(new Set(["all", ...list.map((r) => r.form_name || "Unnamed Form")]))
+        setFormOptions(names)
+        setFetchError(null)
       }
-      setSuccessMsg("Submission received. You can download CSVs below.")
-      setForm({ name: "", phone: "", email: "", country: "", message: "" })
-    } catch (e: any) {
-      setErrorMsg(e.message || "Failed to submit form.")
-    } finally {
-      setSubmitting(false)
+    } catch (e) {
+      console.error(e)
+      setFetchError("Unexpected error occurred.")
     }
   }
 
-  if (checkingAuth) {
-    return (
-      <div className="p-8">
-        <div className="max-w-3xl mx-auto text-gray-600">Loading...</div>
-      </div>
-    )
-  }
+  const filteredRows = useMemo(() => {
+    return rows.filter((r: WebFormRecord) => {
+      const txt = `${r.name || ""} ${r.email || ""} ${r.phone || ""} ${r.message || ""} ${r.form_name || ""}`.toLowerCase()
+      const matchesSearch = txt.includes(searchTerm.toLowerCase())
+
+      const matchesForm = selectedForm === "all" ||
+        (r.form_name || "Unnamed Form").toLowerCase() === selectedForm.toLowerCase()
+
+      const matchesDate = (() => {
+        if (!selectedRange.from || !selectedRange.to) return true
+        const start = startOfDay(selectedRange.from).getTime()
+        const end = endOfDay(selectedRange.to).getTime()
+        const ts = new Date(r.submitted_at || r.created_at || Date.now()).getTime()
+        return ts >= start && ts <= end
+      })()
+
+      return matchesSearch && matchesForm && matchesDate
+    })
+  }, [rows, searchTerm, selectedForm, selectedRange])
 
   return (
-    <div className="p-8">
-      <div className="max-w-3xl mx-auto">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-black">Contact Intake Form</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={onSubmit} className="space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Name</Label>
-                  <Input id="name" placeholder="Your name" value={form.name} onChange={onChange("name")} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="country">Country</Label>
-                  <Input id="country" placeholder="e.g., Uganda" value={form.country} onChange={onChange("country")} />
-                </div>
-              </div>
+    <div className="ml-20 p-6 bg-white min-h-screen">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-black">Web Forms</h1>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input id="phone" placeholder="e.g., +256778825312" value={form.phone} onChange={onChange("phone")} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input id="email" type="email" placeholder="e.g., johndoe@example.com" value={form.email} onChange={onChange("email")} />
-                </div>
-              </div>
-
+        <Dialog open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+          <DialogTrigger asChild>
+            <Button variant="outline" className="flex items-center gap-2 bg-transparent">
+              <Calendar className="h-4 w-4" />
+              {rangeLabel}
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Select Date Range</DialogTitle>
+            </DialogHeader>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="message">Your Message</Label>
-                <Textarea id="message" rows={4} placeholder="Type your message..." value={form.message} onChange={onChange("message")} />
+                <div className="text-sm font-medium text-gray-700">Presets</div>
+                <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
+                  <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('today')}>Today</Button>
+                  <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('last7')}>Last 7 days</Button>
+                  <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('thisMonth')}>This month</Button>
+                  <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('lastMonth')}>Last month</Button>
+                  <Button variant="outline" className="justify-start bg-transparent" onClick={() => applyPreset('all')}>All time</Button>
+                </div>
               </div>
-
-              <div className="text-sm text-gray-600">
-                Provide at least one of Email or Phone. You can export in CSV formats suitable for your Email and WhatsApp campaign pages.
+              <div className="md:col-span-2">
+                <DayPicker
+                  mode="range"
+                  numberOfMonths={2}
+                  showOutsideDays
+                  selected={selectedRange}
+                  onSelect={setSelectedRange}
+                  weekStartsOn={1}
+                  captionLayout="buttons"
+                />
+                <div className="flex justify-end gap-2 mt-2">
+                  <Button variant="outline" className="bg-transparent" onClick={() => { setSelectedRange({}); setRangeLabel('All time'); setIsCalendarOpen(false); }}>Clear</Button>
+                  <Button onClick={applyRange} className="bg-teal-500 hover:bg-teal-600">Apply</Button>
+                </div>
               </div>
-
-              {errorMsg && (
-                <div className="rounded-md border border-red-200 bg-red-50 text-red-700 p-3">{errorMsg}</div>
-              )}
-              {successMsg && (
-                <div className="rounded-md border border-green-200 bg-green-50 text-green-700 p-3">{successMsg}</div>
-              )}
-
-              <div className="flex items-center gap-3">
-                <Button type="submit" className="bg-teal-500 hover:bg-teal-600" disabled={submitting}>
-                  {submitting ? "Submitting..." : "Submit"}
-                </Button>
-
-                {/* CSV exports */}
-                <a
-                  href="/api/contacts-intake?type=email"
-                  className="px-4 py-2 rounded-md border border-gray-300 text-sm hover:bg-gray-50"
-                >
-                  Download Email CSV
-                </a>
-                <a
-                  href="/api/contacts-intake?type=contact"
-                  className="px-4 py-2 rounded-md border border-gray-300 text-sm hover:bg-gray-50"
-                >
-                  Download Contact CSV
-                </a>
-              </div>
-
-              <div className="text-xs text-gray-500 mt-2">
-                Email CSV columns: email,name. Contact CSV columns: phone,notes.
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-4 mb-6">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+          <Input
+            placeholder="Search name, email, phone, or message..."
+            value={searchTerm}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+
+        <Select value={selectedForm} onValueChange={setSelectedForm}>
+          <SelectTrigger className="w-56">
+            <SelectValue placeholder="Select Form" />
+          </SelectTrigger>
+          <SelectContent>
+            {formOptions.map((opt: string) => (
+              <SelectItem key={opt} value={opt}>
+                {opt === "all" ? "All Forms" : opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Data Table */}
+      <Card>
+        <CardHeader className="pb-0">
+          <CardTitle className="text-black text-base">Submissions</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Form</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Message</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted At</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredRows.map((row: WebFormRecord) => {
+                  const submitted = new Date(row.submitted_at || row.created_at || Date.now()).toLocaleString()
+                  return (
+                    <tr key={row.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.form_name || "Unnamed Form"}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.name || "-"}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.email || "-"}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.phone || "-"}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
+                        <div className="truncate" title={row.message || ""}>
+                          {row.message || "-"}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{submitted}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredRows.length === 0 && (
+            <div className="text-center py-8 text-gray-500">No submissions found matching your filters.</div>
+          )}
+          {fetchError && (
+            <div className="text-center py-4 text-red-600">{fetchError}</div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

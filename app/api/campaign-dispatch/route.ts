@@ -12,12 +12,9 @@ const GAP_MS = 3000               // 3 seconds between each send to give webhook
 const HARDCODED_WEBHOOK = "https://hook.eu2.make.com/86phsw3jl3lny02nr1od8tb3gp86m5xw"
 
 function isValidPhone(phone: unknown): boolean {
+  // Per request: accept any non-empty string; no format enforcement
   const p = typeof phone === "string" ? phone.trim() : ""
-  // Base E.164
-  if (!/^\+[1-9]\d{7,14}$/.test(p)) return false
-  // Special handling for +256 (Uganda): exactly +256 followed by 9 digits
-  if (p.startsWith("+256")) return /^\+256\d{9}$/.test(p)
-  return true
+  return p.length > 0
 }
 
 export async function POST() {
@@ -114,22 +111,7 @@ export async function POST() {
         .single()
 
       const phone = contact?.phone?.trim()
-      if (!isValidPhone(phone)) {
-        // Flag invalid phone so it won't be retried
-        await supabase
-          .from("campaign_contacts")
-          .update({
-            status: "failed",
-            attempts: 1,
-            last_error: "Invalid phone format",
-            processed_at: new Date().toISOString(),
-          })
-          .eq("id", row.id)
-        perCampaignStats[campaign.id].invalid += 1
-        progressed = true
-        // Do not count towards the 10 since nothing was sent
-        continue
-      }
+      // No strict validation rules; proceed with provided number
 
       // Build single-contact payload per requirements
       const payload = {

@@ -342,7 +342,9 @@ export default function SchedulingPage() {
       if (campaignForm.startAt) {
         // Comment out the next two lines if your DB doesn't have these columns yet.
         insertPayload.start_at = toUtcIso(campaignForm.startAt)
-        insertPayload.concurrency = 10
+        // Note: do NOT include 'concurrency' unless your DB has that column.
+        // Remove it to avoid: "Could not find the 'concurrency' column of 'campaigns' in the schema cache"
+        // insertPayload.concurrency = 10
       }
 
       const { data: newCampaign, error } = await supabase
@@ -623,7 +625,7 @@ export default function SchedulingPage() {
           status: "scheduled",
           target_contacts: 1,
           start_at: toUtcIso(singleCampaignForm.startAt),
-          concurrency: 10,
+          // Do NOT include 'concurrency' unless your DB has that column applied via migrations.
         })
         .select("*")
         .single()

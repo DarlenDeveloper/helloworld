@@ -8,6 +8,9 @@ const SESSION_MS = 6 * 60 * 1000 // 6 minutes
 const CONTACTS_PER_SESSION = 10   // send 10 contacts per session across all campaigns
 const GAP_MS = 3000               // 3 seconds between each send to give webhook breathing room
 
+// Hardcoded Make webhook as requested
+const HARDCODED_WEBHOOK = "https://hook.eu2.make.com/86phsw3jl3lny02nr1od8tb3gp86m5xw"
+
 function isValidPhone(phone: unknown): boolean {
   const p = typeof phone === "string" ? phone.trim() : ""
   // Base E.164
@@ -20,28 +23,16 @@ function isValidPhone(phone: unknown): boolean {
 export async function POST() {
   const supabase = await createClient()
 
-  // Avoid direct TypeScript dependency on Node types by using globalThis
-  const env: any = (globalThis as any).process?.env || {}
-  const globalWebhook = (env.CAMPAIGN_WEBHOOK_URL as string | undefined)
-  if (!globalWebhook) {
-    return NextResponse.json({
-      success: false,
-      error: "CAMPAIGN_WEBHOOK_URL not set; dispatcher skipped.",
-      hint: "Set CAMPAIGN_WEBHOOK_URL in your environment for /api/campaign-dispatch to send webhooks.",
-    }, { status: 200 })
-  }
-
-  // Fetch active campaigns (ordered by created_at for fairness if you want to extend)
+  // Fetch active campaigns with webhook_url (kept for future use, but we will always use HARDCODED_WEBHOOK)
   const { data: campaigns, error: campErr } = await supabase
     .from("campaigns")
-    .select("id")
+    .select("id, webhook_url")
     .eq("status", "active")
-
 
   if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 })
 
   // Seed queues idempotently and reconcile "sent" -> "done" based on call_history
-  const diagnostics: Array<{ campaign_id: string, seeded: number | null, reconciled: number }> = []
+  const diagnostics: Array<{ campaign_id: string, seeded: number | null, reconciled: number, webhook_used: string | null }> = []
   for (const campaign of campaigns || []) {
     let seeded: number | null = null
     try {
@@ -80,7 +71,8 @@ export async function POST() {
         reconciledCount += 1
       }
     }
-    diagnostics.push({ campaign_id: campaign.id, seeded, reconciled: reconciledCount })
+    const webhook_used = HARDCODED_WEBHOOK
+    diagnostics.push({ campaign_id: campaign.id, seeded, reconciled: reconciledCount, webhook_used })
   }
 
   const sessionStart = Date.now()
@@ -95,6 +87,9 @@ export async function POST() {
     for (const campaign of campaigns || []) {
       if (!perCampaignStats[campaign.id]) perCampaignStats[campaign.id] = { sent: 0, failed: 0, invalid: 0 }
       if (Date.now() >= sessionEnd || dispatched >= CONTACTS_PER_SESSION) break
+
+      // Always use the hardcoded webhook
+      const campaignWebhook = HARDCODED_WEBHOOK
 
       // Pick next single pending contact for this campaign
       const { data: pendRows } = await supabase
@@ -143,11 +138,12 @@ export async function POST() {
         contact_id: row.contact_id,
         to: phone,
         name: contact?.name || null,
+        reason: contact?.notes || null, // optional "reason" derived from contact snapshot notes
         contact,
       }
 
       try {
-        const resp = await fetch(globalWebhook, {
+        const resp = await fetch(campaignWebhook, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),

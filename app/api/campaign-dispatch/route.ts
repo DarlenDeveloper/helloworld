@@ -12,24 +12,40 @@ const GAP_MS = 3000               // 3 seconds between sends
 export async function POST() {
   const supabase = await createClient()
 
+  // Figure out owner_id (auth uid) for RLS on session/events tables
+  let owner_id: string | null = null
+  try {
+    // For SSR server client, use getUser via auth endpoint; if not available, leave null
+    const { data, error } = await (supabase as any).auth.getUser?.()
+    owner_id = data?.user?.id || null
+  } catch {
+    // ignore; RLS will block inserts if auth context missing
+  }
+
   // Active campaigns
   const { data: campaigns, error: campErr } = await supabase
     .from("campaigns")
-    .select("id, webhook_url")
+    .select("id")
     .eq("status", "active")
 
   if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 })
 
-  // Diagnostics
-  const diagnostics: Array<{ campaign_id: string, seeded: number | null, reconciled: number, webhook_used: string | null }> = []
+  // Begin a dispatch session record
+  const sessionStart = Date.now()
+  const config = { CONTACTS_PER_SESSION, SESSION_MS, GAP_MS }
+  let sessionId: string | null = null
+  if (owner_id) {
+    const { data: sessIns } = await supabase
+      .from("dispatch_sessions")
+      .insert([{ owner_id, channel: "call", config }])
+      .select("id")
+      .single()
+    sessionId = (sessIns as any)?.id || null
+  }
 
-  // Reconciliation: mark sent -> done if call_history present
+  // Reconciliation: sent -> done if call_history present
+  const diagnostics: Array<{ campaign_id: string, reconciled: number }> = []
   for (const campaign of campaigns || []) {
-    let seeded: number | null = null
-    // Do NOT call RPC to avoid "no destination for result" errors
-    // Seeding is handled by /api/campaigns/[id]/start which performs idempotent inserts.
-
-    // Reconcile
     const { data: sentRows } = await supabase
       .from("campaign_contacts")
       .select("id, contact_id")
@@ -52,30 +68,38 @@ export async function POST() {
           .update({ status: "done", processed_at: new Date().toISOString() })
           .eq("id", row.id)
         reconciledCount += 1
+
+        // event log
+        if (sessionId && owner_id) {
+          await supabase.from("dispatch_events").insert([{
+            session_id: sessionId,
+            owner_id,
+            campaign_id: campaign.id,
+            contact_id: row.contact_id,
+            channel: "call",
+            action: "done",
+            detail: { reason: "Reconciled from call_history" }
+          }])
+        }
       }
     }
-    const webhook_used = null
-    diagnostics.push({ campaign_id: campaign.id, seeded, reconciled: reconciledCount, webhook_used })
+    diagnostics.push({ campaign_id: campaign.id, reconciled: reconciledCount })
   }
 
-  const sessionStart = Date.now()
-  const sessionEnd = sessionStart + SESSION_MS
   let dispatched = 0
   const perCampaignStats: Record<string, { sent: number, failed: number, invalid: number, queued_remaining: number }> = {}
 
+  const sessionEndDeadline = sessionStart + SESSION_MS
+
   // Loop within session window and global limit
-  while (Date.now() < sessionEnd && dispatched < CONTACTS_PER_SESSION) {
+  while (Date.now() < sessionEndDeadline && dispatched < CONTACTS_PER_SESSION) {
     let progressed = false
 
     for (const campaign of campaigns || []) {
-      if (Date.now() >= sessionEnd || dispatched >= CONTACTS_PER_SESSION) break
+      if (Date.now() >= sessionEndDeadline || dispatched >= CONTACTS_PER_SESSION) break
       if (!perCampaignStats[campaign.id]) perCampaignStats[campaign.id] = { sent: 0, failed: 0, invalid: 0, queued_remaining: 0 }
 
-      // Resolve webhook: campaign-specific or fallback env
-      const fallbackWebhook = process.env.CAMPAIGN_WEBHOOK_URL || process.env.DISPATCH_WEBHOOK_URL
-      const campaignWebhook = (campaign.webhook_url && campaign.webhook_url.trim().length > 0) ? campaign.webhook_url.trim() : (fallbackWebhook || null)
-
-      // Pull one queued contact atomically-ish: pick oldest pending
+      // Pull one queued contact
       const { data: pendRows } = await supabase
         .from("campaign_contacts")
         .select("id, contact_id")
@@ -85,7 +109,6 @@ export async function POST() {
         .limit(1)
 
       if (!pendRows || pendRows.length === 0) {
-        // Update queued remaining metric
         const { count } = await supabase
           .from("campaign_contacts")
           .select("*", { count: "exact", head: true })
@@ -97,7 +120,7 @@ export async function POST() {
 
       const row = pendRows[0]
 
-      // Load contact minimal fields
+      // Load contact
       const { data: contact } = await supabase
         .from("contacts")
         .select("id, name, email, phone, opted_out, notes")
@@ -105,14 +128,27 @@ export async function POST() {
         .limit(1)
         .single()
 
-      // Validate phone using unified utils
       const phoneRaw = contact?.phone ?? null
       const phoneNorm = normalizePhone(phoneRaw)
       const phoneOk = !!phoneNorm && isValidPhone(phoneNorm)
       const optedOut = !!contact?.opted_out
 
-      if (!phoneOk || optedOut || !campaignWebhook) {
-        const reason = !campaignWebhook ? "No webhook configured" : optedOut ? "Opted out" : "Invalid phone"
+      // Record selection event
+      if (sessionId && owner_id) {
+        await supabase.from("dispatch_events").insert([{
+          session_id: sessionId,
+          owner_id,
+          campaign_id: campaign.id,
+          contact_id: row.contact_id,
+          channel: "call",
+          action: "selected",
+          detail: { to: phoneNorm || null }
+        }])
+      }
+
+      // Invalid reasons
+      if (!phoneOk || optedOut) {
+        const reason = optedOut ? "Opted out" : "Invalid phone"
         await supabase
           .from("campaign_contacts")
           .update({
@@ -123,74 +159,55 @@ export async function POST() {
           })
           .eq("id", row.id)
         perCampaignStats[campaign.id].invalid += 1
+
+        if (sessionId && owner_id) {
+          await supabase.from("dispatch_events").insert([{
+            session_id: sessionId,
+            owner_id,
+            campaign_id: campaign.id,
+            contact_id: row.contact_id,
+            channel: "call",
+            action: "invalid",
+            detail: { to: phoneNorm || null, reason }
+          }])
+        }
         progressed = true
         continue
       }
 
-      // Build payload
-      const payload = {
-        channel: "call",
-        campaign_id: campaign.id,
-        contact_id: row.contact_id,
-        to: phoneNorm,
-        name: contact?.name || null,
-        reason: contact?.notes || null,
-        contact,
+      // No external webhook; mark as "sent" in-DB and log event
+      await supabase
+        .from("campaign_contacts")
+        .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
+        .eq("id", row.id)
+
+      perCampaignStats[campaign.id].sent += 1
+      dispatched += 1
+      progressed = true
+
+      if (sessionId && owner_id) {
+        await supabase.from("dispatch_events").insert([{
+          session_id: sessionId,
+          owner_id,
+          campaign_id: campaign.id,
+          contact_id: row.contact_id,
+          channel: "call",
+          action: "sent",
+          detail: {
+            to: phoneNorm,
+            name: contact?.name || null,
+            reason: contact?.notes || null
+          }
+        }])
       }
 
-      try {
-        const resp = await fetch(campaignWebhook, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "")
-          await supabase
-            .from("campaign_contacts")
-            .update({
-              status: "failed",
-              attempts: 1,
-              last_error: `HTTP ${resp.status}: ${text}`.slice(0, 1000),
-              processed_at: new Date().toISOString(),
-            })
-            .eq("id", row.id)
-          perCampaignStats[campaign.id].failed += 1
-        } else {
-          await supabase
-            .from("campaign_contacts")
-            .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
-            .eq("id", row.id)
-          perCampaignStats[campaign.id].sent += 1
-          dispatched += 1
-          await sleep(GAP_MS)
-        }
-        progressed = true
-      } catch (e: any) {
-        await supabase
-          .from("campaign_contacts")
-          .update({
-            status: "failed",
-            attempts: 1,
-            last_error: String(e).slice(0, 1000),
-            processed_at: new Date().toISOString(),
-          })
-          .eq("id", row.id)
-        perCampaignStats[campaign.id].failed += 1
-        progressed = true
-      }
+      await sleep(GAP_MS)
     }
 
     if (!progressed) break
   }
 
-  const now = Date.now()
-  if (now < sessionEnd) {
-    await sleep(sessionEnd - now)
-  }
-
-  // Compute final queued remaining for each campaign
+  // Compute remaining queued
   for (const campaign of campaigns || []) {
     const { count } = await supabase
       .from("campaign_contacts")
@@ -201,14 +218,32 @@ export async function POST() {
     perCampaignStats[campaign.id].queued_remaining = count || 0
   }
 
+  // Close session with totals
+  const sessionTotals = {
+    dispatched,
+    duration_ms: Date.now() - sessionStart,
+    // Aggregate quick sums
+    sent: Object.values(perCampaignStats).reduce((s, v) => s + v.sent, 0),
+    failed: Object.values(perCampaignStats).reduce((s, v) => s + v.failed, 0),
+    invalid: Object.values(perCampaignStats).reduce((s, v) => s + v.invalid, 0),
+  }
+  if (sessionId && owner_id) {
+    await supabase
+      .from("dispatch_sessions")
+      .update({ ended_at: new Date().toISOString(), totals: sessionTotals })
+      .eq("id", sessionId)
+      .eq("owner_id", owner_id)
+  }
+
   return NextResponse.json({
     success: true,
     session: {
+      id: sessionId,
       started_at: new Date(sessionStart).toISOString(),
       ended_at: new Date(Date.now()).toISOString(),
       dispatched,
       max: CONTACTS_PER_SESSION,
-      duration_ms: Date.now() - sessionStart,
+      duration_ms: sessionTotals.duration_ms,
     },
     diagnostics: {
       campaigns: diagnostics,

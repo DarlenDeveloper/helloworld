@@ -324,17 +324,17 @@ export default function SchedulingPage() {
         if (!cntErr) totalContacts += count || 0
       }
 
-      const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
-
-      // Persist schedule (start_at) and concurrency from the form, aligned with backend schema
+      // Persist ONLY columns that exist on campaigns table schema.
+      // Everything else (schedule, concurrency) is runtime-only and handled outside the DB row.
       const insertPayload: any = {
         user_id: user.id,
         name: campaignForm.name.trim(),
-        description,
-        status: campaignForm.startAt ? "scheduled" : "draft",
+        // keep rich description in DB for operator context
+        description: `Prompt: ${campaignForm.prompt}\nConcurrent Lines: ${campaignForm.concurrentCalls}\n${
+          campaignForm.startAt ? `Scheduled(Local): ${formatDateLocal(campaignForm.startAt)} ${formatTimeLocal(campaignForm.startAt)}` : "No Schedule"
+        }`,
+        status: "draft",
         target_contacts: totalContacts,
-        start_at: toUtcIso(campaignForm.startAt),
-        concurrency: campaignForm.concurrentCalls,
       }
 
       const { data: newCampaign, error } = await supabase
@@ -606,17 +606,17 @@ export default function SchedulingPage() {
       if (snapshotErr) throw snapshotErr
 
       // 4) Create campaign
-      const description = `Prompt: ${singleCampaignForm.prompt}\nConcurrent Calls: 10\nsingle=true`
+      const description = `Prompt: ${singleCampaignForm.prompt}\nConcurrent Lines: 10\nsingle=true\n${
+        singleCampaignForm.startAt ? `Scheduled(Local): ${formatDateLocal(singleCampaignForm.startAt)} ${formatTimeLocal(singleCampaignForm.startAt)}` : "No Schedule"
+      }`
       const { data: newCampaign, error: campErr } = await supabase
         .from("campaigns")
         .insert({
           user_id: user.id,
           name: singleCampaignForm.name.trim(),
           description,
-          status: singleCampaignForm.startAt ? "scheduled" : "draft",
+          status: "draft",
           target_contacts: 1,
-          start_at: toUtcIso(singleCampaignForm.startAt),
-          concurrency: 10,
         })
         .select("*")
         .single()
@@ -886,6 +886,33 @@ export default function SchedulingPage() {
                     <Button onClick={handleCreateCampaign} disabled={isCreatingCampaign} className="bg-teal-500 hover:bg-teal-600">
                       {isCreatingCampaign ? "Creating..." : "Create Campaign"}
                     </Button>
+                  </div>
+
+                  {/* Runtime-only Controls */}
+                  <div className="rounded-md border p-3 mt-2">
+                    <div className="text-xs text-gray-500 mb-1">Runtime controls (not persisted):</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div>
+                        <Label htmlFor="concurrency">Concurrent Lines</Label>
+                        <Input
+                          id="concurrency"
+                          type="number"
+                          min={1}
+                          max={1000}
+                          step={1}
+                          value={campaignForm.concurrentCalls}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                            setCampaignForm((prev) => ({
+                              ...prev,
+                              concurrentCalls: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="text-xs text-gray-500 self-end">
+                        Concurrency guides dispatch pacing but is not stored in campaigns; the webhook/dispatcher reads it from description or runtime config.
+                      </div>
+                    </div>
                   </div>
                 </div>
               </DialogContent>

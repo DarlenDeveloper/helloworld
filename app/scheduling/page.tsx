@@ -102,7 +102,7 @@ export default function SchedulingPage() {
 
   const [campaignForm, setCampaignForm] = useState({
     name: "",
-    concurrentCalls: 10, // fixed to 10 per request
+    concurrentCalls: 10, // UI picker below controls this value
     prompt: "",
     selectedBatches: [] as string[],
     startAt: null as Date | null, // scheduled start datetime
@@ -326,8 +326,7 @@ export default function SchedulingPage() {
 
       const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
 
-      // Reconnect to backend schema (assumes scripts/simple_auth/002_campaign_system.sql applied)
-      // Persist schedule (start_at) and concurrency as designed.
+      // Persist schedule (start_at) and concurrency from the form, aligned with backend schema
       const insertPayload: any = {
         user_id: user.id,
         name: campaignForm.name.trim(),
@@ -335,7 +334,7 @@ export default function SchedulingPage() {
         status: campaignForm.startAt ? "scheduled" : "draft",
         target_contacts: totalContacts,
         start_at: toUtcIso(campaignForm.startAt),
-        concurrency: 10,
+        concurrency: campaignForm.concurrentCalls,
       }
 
       const { data: newCampaign, error } = await supabase
@@ -817,8 +816,28 @@ export default function SchedulingPage() {
                       />
                     </div>
                     <div className="text-xs text-gray-500">
-                      If blank, campaign remains scheduled with no start; you can start it manually later. Concurrency is fixed to 10 lines.
+                      If blank, campaign remains scheduled with no start; you can start it manually later.
                     </div>
+                  </div>
+
+                  {/* Concurrency Picker */}
+                  <div className="space-y-2">
+                    <Label htmlFor="concurrency">Concurrent Lines</Label>
+                    <Input
+                      id="concurrency"
+                      type="number"
+                      min={1}
+                      max={1000}
+                      step={1}
+                      value={campaignForm.concurrentCalls}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                        setCampaignForm((prev) => ({
+                          ...prev,
+                          concurrentCalls: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
+                        }))
+                      }
+                    />
+                    <div className="text-xs text-gray-500">How many calls to run in parallel; sent to backend as "concurrency".</div>
                   </div>
 
                   {/* Contact Batches */}

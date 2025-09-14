@@ -65,9 +65,10 @@ export default function SchedulingPage() {
 
   const [campaignForm, setCampaignForm] = useState({
     name: "",
-    concurrentCalls: 3,
+    concurrentCalls: 10, // fixed to 10 per request
     prompt: "",
     selectedBatches: [] as string[],
+    startAt: null as Date | null, // scheduled start datetime
   })
 
   // start campaign state
@@ -158,9 +159,10 @@ export default function SchedulingPage() {
   }
 
   const fetchCampaigns = async (userId: string) => {
+    // include start_at if present
     const { data, error } = await supabase
       .from("campaigns")
-      .select("*")
+      .select("*, start_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
 
@@ -283,8 +285,10 @@ export default function SchedulingPage() {
           user_id: user.id,
           name: campaignForm.name.trim(),
           description,
-          status: "draft",
+          status: "scheduled", // mark as scheduled if startAt provided, else draft
           target_contacts: totalContacts,
+          start_at: campaignForm.startAt ? new Date(campaignForm.startAt).toISOString() : null,
+          concurrency: 10,
         })
         .select("*")
         .single()
@@ -304,7 +308,7 @@ export default function SchedulingPage() {
       }
 
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-      setCampaignForm({ name: "", concurrentCalls: 3, prompt: "", selectedBatches: [] })
+      setCampaignForm({ name: "", concurrentCalls: 10, prompt: "", selectedBatches: [], startAt: null })
       setIsCreateCampaignOpen(false)
     } catch (err) {
       console.error("Error creating campaign:", err)
@@ -576,7 +580,7 @@ export default function SchedulingPage() {
                   <DialogTitle id="create-campaign-title">Create New Campaign</DialogTitle>
                 </DialogHeader>
                 <div className="sr-only" id="create-campaign-desc">
-                  Fill out the campaign details including name, concurrency, contact batches, and prompt.
+                  Fill out the campaign details including name, contact batches, prompt, and schedule a start date/time.
                 </div>
                 <div role="document" aria-labelledby="create-campaign-title" className="space-y-6">
                   {/* Campaign Name */}
@@ -592,26 +596,47 @@ export default function SchedulingPage() {
                     />
                   </div>
 
-                  {/* Concurrent Calls */}
+                  {/* Start Date/Time (Calendar) */}
                   <div className="space-y-2">
-                    <Label htmlFor="concurrent-calls">Concurrent Calls</Label>
-                    <Select
-                      value={campaignForm.concurrentCalls.toString()}
-                      onValueChange={(value: string) =>
-                        setCampaignForm((prev) => ({ ...prev, concurrentCalls: Number.parseInt(value) }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1">1</SelectItem>
-                        <SelectItem value="2">2</SelectItem>
-                        <SelectItem value="3">3</SelectItem>
-                        <SelectItem value="5">5</SelectItem>
-                        <SelectItem value="10">10</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="start-at">Schedule Start</Label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <Input
+                        id="start-at"
+                        type="date"
+                        value={campaignForm.startAt ? new Date(campaignForm.startAt).toISOString().slice(0,10) : ""}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const date = e.target.value
+                          setCampaignForm((prev) => {
+                            const current = prev.startAt ? new Date(prev.startAt) : new Date()
+                            if (!date) return { ...prev, startAt: null }
+                            const [y,m,d] = date.split("-").map(Number)
+                            const next = new Date(current)
+                            next.setFullYear(y)
+                            next.setMonth((m||1)-1)
+                            next.setDate(d||1)
+                            return { ...prev, startAt: next }
+                          })
+                        }}
+                      />
+                      <Input
+                        type="time"
+                        step={60}
+                        value={campaignForm.startAt ? new Date(campaignForm.startAt).toISOString().slice(11,16) : ""}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const time = e.target.value
+                          setCampaignForm((prev) => {
+                            if (!time) return { ...prev, startAt: prev.startAt }
+                            const [hh,mm] = time.split(":").map(Number)
+                            const base = prev.startAt ? new Date(prev.startAt) : new Date()
+                            base.setHours(hh||0, mm||0, 0, 0)
+                            return { ...prev, startAt: base }
+                          })
+                        }}
+                      />
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      If blank, campaign remains scheduled with no start; you can start it manually later. Concurrency is fixed to 10 lines.
+                    </div>
                   </div>
 
                   {/* Contact Batches */}
@@ -847,39 +872,106 @@ export default function SchedulingPage() {
                   {campaigns.length === 0 && (
                     <div className="text-sm text-gray-500">No campaigns yet. Create one to get started.</div>
                   )}
-                  {campaigns.map((campaign) => (
-                    <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="font-medium text-black">{campaign.name}</h3>
-                        <div className="flex items-center gap-2">
-                          <Badge className="bg-blue-100 text-blue-800 capitalize">{campaign.status}</Badge>
-                          {campaign.status !== "active" && (
-                            <Button size="sm" onClick={() => startCampaign(campaign.id)} disabled={starting && startingCampaignId === campaign.id} className="bg-teal-500 hover:bg-teal-600">
-                              <Play className="h-4 w-4 mr-1" /> {starting && startingCampaignId === campaign.id ? "Starting..." : "Start"}
-                            </Button>
+                  {campaigns.map((campaign) => {
+                    // derive scheduling and progress with concurrency=10
+                    const concurrency = 10
+                    const contacts = Math.max(0, campaign.target_contacts ?? 0)
+                    const totalSeconds = concurrency > 0 ? Math.ceil(contacts / concurrency) : contacts
+                    const startAtIso = (campaign as any).start_at as string | null
+                    const startAt = startAtIso ? new Date(startAtIso) : null
+                
+                    // progress based on wall-clock time from startAt to ETA
+                    let pct = 0
+                    let eta: Date | null = null
+                    let remaining = ""
+                    if (startAt && Number.isFinite(totalSeconds) && totalSeconds > 0) {
+                      eta = new Date(startAt.getTime() + totalSeconds * 1000)
+                      const now = new Date()
+                      const elapsed = Math.max(0, Math.floor((now.getTime() - startAt.getTime()) / 1000))
+                      const p = Math.min(100, Math.max(0, (elapsed / totalSeconds) * 100))
+                      pct = Number.isFinite(p) ? p : 0
+                      const remainSec = Math.max(0, Math.floor((eta.getTime() - now.getTime()) / 1000))
+                      const hh = Math.floor(remainSec / 3600)
+                      const mm = Math.floor((remainSec % 3600) / 60)
+                      const ss = Math.floor(remainSec % 60)
+                      const pad = (n: number) => n.toString().padStart(2, "0")
+                      remaining = `${hh > 0 ? `${hh}:` : ""}${pad(mm)}:${pad(ss)} remaining`
+                    }
+                
+                    return (
+                      <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <h3 className="font-medium text-black">{campaign.name}</h3>
+                            {startAt ? (
+                              <div className="text-xs text-gray-500 flex items-center gap-1">
+                                <CalendarIcon className="h-3 w-3" />
+                                Starts {format(startAt, "PPpp")}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-gray-500">No scheduled start</div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge className="bg-blue-100 text-blue-800 capitalize">
+                              {campaign.status}
+                            </Badge>
+                            {campaign.status !== "active" && (
+                              <Button
+                                size="sm"
+                                onClick={() => startCampaign(campaign.id)}
+                                disabled={starting && startingCampaignId === campaign.id}
+                                className="bg-teal-500 hover:bg-teal-600"
+                              >
+                                <Play className="h-4 w-4 mr-1" />{" "}
+                                {starting && startingCampaignId === campaign.id ? "Starting..." : "Start"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                
+                        <div className="space-y-2 text-sm text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <Users className="h-4 w-4" />
+                            {contacts} contacts • Concurrency {concurrency}
+                          </div>
+                
+                          {/* Visual progress based on time window */}
+                          {startAt && totalSeconds > 0 && (
+                            <div className="space-y-1">
+                              <div className="h-2 w-full bg-gray-100 rounded overflow-hidden">
+                                <div
+                                  className="h-2 bg-teal-500 transition-[width] duration-1000 ease-linear"
+                                  style={{ width: `${pct}%` }}
+                                  aria-valuenow={pct}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                />
+                              </div>
+                              <div className="flex justify-between text-xs text-gray-500">
+                                <span>{Math.round(pct)}%</span>
+                                <span>{eta ? `ETA ${format(eta, "PPpp")}` : ""}</span>
+                                <span>{remaining}</span>
+                              </div>
+                            </div>
+                          )}
+                
+                          {/* Fallback numeric estimate if no schedule */}
+                          {!startAt && (
+                            <div className="flex items-center gap-2">
+                              {(() => {
+                                const hh = Math.floor(totalSeconds / 3600)
+                                const mm = Math.floor((totalSeconds % 3600) / 60)
+                                const ss = Math.floor(totalSeconds % 60)
+                                const pad = (n: number) => n.toString().padStart(2, "0")
+                                return <span>Est. time: {hh > 0 ? `${hh}:` : ""}{pad(mm)}:{pad(ss)}</span>
+                              })()}
+                            </div>
                           )}
                         </div>
                       </div>
-                      <div className="space-y-2 text-sm text-gray-600">
-                        <div className="flex items-center gap-2"><Users className="h-4 w-4" />{campaign.target_contacts ?? 0} contacts</div>
-                        <div className="flex items-center gap-2"><CalendarIcon className="h-4 w-4" />Created {format(new Date(campaign.created_at), "MMM d, yyyy")}</div>
-                        <div className="flex items-center gap-2">
-                          {(() => {
-                            // Estimate time if we have concurrent calls: assume one call initiated per second per line
-                            const m = (campaign.description || '').match(/Concurrent\s*Calls\s*:\s*(\d+)/i)
-                            const lines = m ? Math.max(1, Number((m[1] || '').trim()) || 1) : 1
-                            const contacts = Math.max(0, campaign.target_contacts ?? 0)
-                            const totalSeconds = lines > 0 ? Math.ceil(contacts / lines) : contacts
-                            const hh = Math.floor(totalSeconds / 3600)
-                            const mm = Math.floor((totalSeconds % 3600) / 60)
-                            const ss = Math.floor(totalSeconds % 60)
-                            const pad = (n: number) => n.toString().padStart(2, '0')
-                            return <span>Est. time: {hh > 0 ? `${hh}:` : ''}{pad(mm)}:{pad(ss)}</span>
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </CardContent>
             </Card>

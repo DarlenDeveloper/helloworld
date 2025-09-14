@@ -326,19 +326,16 @@ export default function SchedulingPage() {
 
       const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
 
-      // Validate SQL schema expectations before insert to avoid unknown column errors
-      // The base schema in 000_simple_schema.sql defines campaigns without start_at/concurrency columns.
-      // Guard these fields so we don't send unknown columns to Supabase if your DB hasn't applied 002_campaign_system.sql yet.
+      // Reconnect to backend schema (assumes scripts/simple_auth/002_campaign_system.sql applied)
+      // Persist schedule (start_at) and concurrency as designed.
       const insertPayload: any = {
         user_id: user.id,
         name: campaignForm.name.trim(),
         description,
-        // Do NOT reference columns that may not exist in your DB schema.
-        // 'status' is present in base schema; keep it consistent whether or not startAt is set.
-        status: "draft",
+        status: campaignForm.startAt ? "scheduled" : "draft",
         target_contacts: totalContacts,
-        // Do NOT include start_at here to avoid "Could not find the 'start_at' column ...".
-        // Scheduling UI is preserved, but persistence of 'start_at' is skipped when the DB lacks that column.
+        start_at: toUtcIso(campaignForm.startAt),
+        concurrency: 10,
       }
 
       const { data: newCampaign, error } = await supabase
@@ -349,6 +346,7 @@ export default function SchedulingPage() {
 
       if (error || !newCampaign) {
         console.error("Failed to create campaign:", error)
+        // Surface the exact backend error for fast diagnosis
         alert(error?.message ? `Failed to create campaign: ${error.message}` : "Failed to create campaign")
         return
       }
@@ -616,10 +614,10 @@ export default function SchedulingPage() {
           user_id: user.id,
           name: singleCampaignForm.name.trim(),
           description,
-          status: "draft",
+          status: singleCampaignForm.startAt ? "scheduled" : "draft",
           target_contacts: 1,
-          // Skipping 'start_at' to avoid schema errors on databases without that column.
-          // Do NOT include 'concurrency' unless your DB has that column applied via migrations.
+          start_at: toUtcIso(singleCampaignForm.startAt),
+          concurrency: 10,
         })
         .select("*")
         .single()

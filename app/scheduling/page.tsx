@@ -745,7 +745,7 @@ export default function SchedulingPage() {
                       />
                     </div>
                     <div className="text-xs text-gray-500">
-                      If blank, campaign remains scheduled with no start; you can start it manually later. Concurrency is fixed to 10 lines.
+                      If blank, campaign remains a draft; start it manually later. These controls are runtime-only and not stored.
                     </div>
                   </div>
 

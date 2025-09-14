@@ -71,7 +71,7 @@ export default function WebFormsPage() {
       setSelectedRange({ from, to })
       setRangeLabel('Last month')
     } else {
-      setSelectedRange({})
+      setSelectedRange(undefined)
       setRangeLabel('All time')
     }
     setIsCalendarOpen(false)
@@ -193,12 +193,12 @@ export default function WebFormsPage() {
           </DialogTrigger>
           <DialogContent className="max-w-3xl" aria-describedby="date-range-desc">
             <DialogHeader>
-              <DialogTitle>Select Date Range</DialogTitle>
+              <DialogTitle id="date-range-title">Select Date Range</DialogTitle>
             </DialogHeader>
             <div className="sr-only" id="date-range-desc">
               Choose a preset or a custom range using the calendar. Apply to filter submissions.
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div role="document" aria-labelledby="date-range-title" className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <div className="text-sm font-medium text-gray-700">Presets</div>
                 <div className="grid grid-cols-2 md:grid-cols-1 gap-2">

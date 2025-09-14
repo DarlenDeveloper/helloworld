@@ -571,21 +571,36 @@ export default function SchedulingPage() {
                   Create Campaign
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-2xl">
+              <DialogContent className="max-w-2xl" aria-describedby="create-campaign-desc">
                 <DialogHeader>
-                  <DialogTitle>Create New Campaign</DialogTitle>
+                  <DialogTitle id="create-campaign-title">Create New Campaign</DialogTitle>
                 </DialogHeader>
-                <div className="space-y-6">
+                <div className="sr-only" id="create-campaign-desc">
+                  Fill out the campaign details including name, concurrency, contact batches, and prompt.
+                </div>
+                <div role="document" aria-labelledby="create-campaign-title" className="space-y-6">
                   {/* Campaign Name */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-name">Campaign Name *</Label>
-                    <Input id="campaign-name" placeholder="Enter campaign name" value={campaignForm.name} onChange={(e) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
+                    <Input
+                      id="campaign-name"
+                      placeholder="Enter campaign name"
+                      value={campaignForm.name}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                        setCampaignForm((prev) => ({ ...prev, name: e.target.value }))
+                      }
+                    />
                   </div>
 
                   {/* Concurrent Calls */}
                   <div className="space-y-2">
                     <Label htmlFor="concurrent-calls">Concurrent Calls</Label>
-                    <Select value={campaignForm.concurrentCalls.toString()} onValueChange={(value) => setCampaignForm((prev) => ({ ...prev, concurrentCalls: Number.parseInt(value) }))}>
+                    <Select
+                      value={campaignForm.concurrentCalls.toString()}
+                      onValueChange={(value: string) =>
+                        setCampaignForm((prev) => ({ ...prev, concurrentCalls: Number.parseInt(value) }))
+                      }
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -608,7 +623,13 @@ export default function SchedulingPage() {
                       )}
                       {contactBatches.map((batch) => (
                         <div key={batch.id} className="flex items-center space-x-2">
-                          <Checkbox id={`batch-${batch.id}`} checked={campaignForm.selectedBatches.includes(batch.id)} onCheckedChange={(checked) => handleBatchSelection(batch.id, checked as boolean)} />
+                          <Checkbox
+                            id={`batch-${batch.id}`}
+                            checked={campaignForm.selectedBatches.includes(batch.id)}
+                            onCheckedChange={(checked: boolean | "indeterminate") =>
+                              handleBatchSelection(batch.id, Boolean(checked) && checked !== "indeterminate")
+                            }
+                          />
                           <Label htmlFor={`batch-${batch.id}`} className="flex-1 cursor-pointer">
                             {batch.name} ({batch.contact_count} contacts)
                           </Label>
@@ -620,7 +641,15 @@ export default function SchedulingPage() {
                   {/* Campaign Prompt */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-prompt">Campaign Prompt *</Label>
-                    <Textarea id="campaign-prompt" placeholder="Enter the script or prompt for this campaign..." rows={4} value={campaignForm.prompt} onChange={(e) => setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))} />
+                    <Textarea
+                      id="campaign-prompt"
+                      placeholder="Enter the script or prompt for this campaign..."
+                      rows={4}
+                      value={campaignForm.prompt}
+                      onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                        setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))
+                      }
+                    />
                   </div>
 
                   {/* Action Buttons */}
@@ -663,29 +692,59 @@ export default function SchedulingPage() {
                             Add Contact
                           </Button>
                         </DialogTrigger>
-                        <DialogContent className="max-w-md">
+                        <DialogContent className="max-w-md" aria-describedby="add-contact-desc">
                           <DialogHeader>
-                            <DialogTitle>Add Contact</DialogTitle>
+                            <DialogTitle id="add-contact-title">Add Contact</DialogTitle>
                           </DialogHeader>
-                          <div className="space-y-3">
+                          <div className="sr-only" id="add-contact-desc">
+                            Enter the contact details including phone number in E.164 format, optionally name, email, and notes.
+                          </div>
+                          <div role="document" aria-labelledby="add-contact-title" className="space-y-3">
                             <div>
                               <Label htmlFor="add-name">Name (optional)</Label>
-                              <Input id="add-name" value={manualContact.name} onChange={(e) => setManualContact((p) => ({ ...p, name: e.target.value }))} />
+                              <Input
+                                id="add-name"
+                                value={manualContact.name}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                  setManualContact((p) => ({ ...p, name: e.target.value }))
+                                }
+                              />
                             </div>
                             <div>
                               <Label htmlFor="add-phone">Phone *</Label>
-                              <Input id="add-phone" value={manualContact.phone} onChange={(e) => setManualContact((p) => ({ ...p, phone: e.target.value }))} placeholder="e.g., +256778825312" />
+                              <Input
+                                id="add-phone"
+                                value={manualContact.phone}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                  setManualContact((p) => ({ ...p, phone: e.target.value }))
+                                }
+                                placeholder="e.g., +256778825312"
+                              />
                               {manualContact.phone && !phoneValidation.valid && (
                                 <div className="text-xs text-red-600 mt-1">Invalid phone. Use E.164 format, e.g., +256778825312</div>
                               )}
                             </div>
                             <div>
                               <Label htmlFor="add-email">Email (optional)</Label>
-                              <Input id="add-email" type="email" value={manualContact.email} onChange={(e) => setManualContact((p) => ({ ...p, email: e.target.value }))} />
+                              <Input
+                                id="add-email"
+                                type="email"
+                                value={manualContact.email}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                  setManualContact((p) => ({ ...p, email: e.target.value }))
+                                }
+                              />
                             </div>
                             <div>
                               <Label htmlFor="add-notes">Notes (optional)</Label>
-                              <Textarea id="add-notes" rows={3} value={manualContact.notes} onChange={(e) => setManualContact((p) => ({ ...p, notes: e.target.value }))} />
+                              <Textarea
+                                id="add-notes"
+                                rows={3}
+                                value={manualContact.notes}
+                                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                                  setManualContact((p) => ({ ...p, notes: e.target.value }))
+                                }
+                              />
                             </div>
                             <div className="flex justify-end gap-2">
                               <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>Cancel</Button>
@@ -746,10 +805,26 @@ export default function SchedulingPage() {
                           <div className="text-sm text-gray-600">{batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}</div>
                         </div>
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); const newName = prompt("Enter new batch name:", batch.name); if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim()) }}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+                              e.stopPropagation()
+                              const newName = prompt("Enter new batch name:", batch.name)
+                              if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim())
+                            }}
+                          >
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="text-red-600" onClick={(e) => { e.stopPropagation(); handleDeleteBatch(batch.id) }}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-600"
+                            onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+                              e.stopPropagation()
+                              handleDeleteBatch(batch.id)
+                            }}
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>

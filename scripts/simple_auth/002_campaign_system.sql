@@ -55,8 +55,7 @@ BEGIN
       )
   )
   INSERT INTO public.campaign_contacts(campaign_id, contact_id)
-  SELECT campaign_id, contact_id FROM to_insert
-  RETURNING 1;
+  SELECT campaign_id, contact_id FROM to_insert;
 
   GET DIAGNOSTICS inserted_count = ROW_COUNT;
   RETURN COALESCE(inserted_count, 0);

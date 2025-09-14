@@ -20,17 +20,9 @@ function parseField(desc: string | null | undefined, key: string): string | null
 
 export async function POST() {
   const supabase = await createClient()
-  const webhook = process.env.EMAIL_WEBHOOK_URL || process.env.CAMPAIGN_WEBHOOK_URL
+  const fallbackWebhook = process.env.EMAIL_WEBHOOK_URL || process.env.CAMPAIGN_WEBHOOK_URL
 
-  if (!webhook) {
-    return NextResponse.json({
-      success: false,
-      error: "No EMAIL_WEBHOOK_URL configured; skipping dispatch.",
-      hint: "Set EMAIL_WEBHOOK_URL or CAMPAIGN_WEBHOOK_URL to enable Email dispatch."
-    })
-  }
-
-  // Find active Email campaigns (identified by Channel: Email in description)
+  // Active Email campaigns
   const { data: campaigns, error: campErr } = await supabase
     .from("email_campaigns")
     .select("id, status, description, webhook_url")
@@ -45,18 +37,8 @@ export async function POST() {
     const channel = parseChannel(camp.description)
     if (channel !== "email") continue
 
-    // Ensure queue is populated for this campaign
+    // We skip seeding RPC to avoid \"no destination for result\" errors; rely on start step for seeding.
     let seeded: number | null = null
-    try {
-      const { data: seededCount, error: seedErr } = await supabase.rpc("populate_email_campaign_contacts", { p_campaign: camp.id })
-      if (seedErr) {
-        console.error("[email-dispatch] populate_email_campaign_contacts failed", camp.id, seedErr.message)
-      } else {
-        seeded = Number(seededCount ?? 0)
-      }
-    } catch (e: any) {
-      console.error("[email-dispatch] populate_email_campaign_contacts exception", camp.id, String(e))
-    }
 
     // Pick next up to 5 pending contacts for this campaign
     const { data: pendRows, error: pendErr } = await supabase
@@ -68,7 +50,6 @@ export async function POST() {
       .limit(5)
 
     if (pendErr) {
-      // move to next campaign
       continue
     }
 
@@ -77,28 +58,28 @@ export async function POST() {
       continue
     }
 
-    // Fetch the contact details in-bulk
+    // Fetch contacts in bulk
     const contactIds = pendRows.map((r: { contact_id: string }) => r.contact_id)
     const { data: contacts } = await supabase
       .from("contacts")
-      .select("id, name, email, phone, notes")
+      .select("id, name, email, phone, notes, opted_out")
       .in("id", contactIds)
 
-    type ContactRow = { id: string; name?: string | null; email?: string | null; phone?: string | null; notes?: string | null }
+    type ContactRow = { id: string; name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; opted_out?: boolean | null }
     const byId = new Map<string, ContactRow>()
     ;((contacts as ContactRow[] | null) || []).forEach((c: ContactRow) => byId.set(c.id, c))
 
     const subject = parseField(camp.description, "Subject") || ""
     const body = parseField(camp.description, "Body") || ""
-    const campaignWebhook = camp.webhook_url || webhook
+    const campaignWebhook = (camp.webhook_url && camp.webhook_url.trim().length > 0) ? camp.webhook_url.trim() : (fallbackWebhook || null)
     let sentCount = 0
     let failedCount = 0
     let skippedNoEmail = 0
 
-    // Determine pacing interval (seconds)
+    // pacing
     const intervalSecondsStr = parseField(camp.description, "IntervalSeconds") || parseField(camp.description, "RateLimitSeconds")
     const perSecStr = parseField(camp.description, "RateLimitPerSec")
-    let intervalMs = 1000 // default 1 second
+    let intervalMs = 1000
     if (intervalSecondsStr) {
       const s = Number(intervalSecondsStr)
       if (!Number.isNaN(s) && s > 0) intervalMs = Math.round(s * 1000)
@@ -109,14 +90,17 @@ export async function POST() {
 
     for (const row of pendRows) {
       const contact = byId.get(row.contact_id)
-      const to = contact?.email?.trim()
+      const to = (contact?.email || "").trim()
+      const optedOut = !!contact?.opted_out
 
-      if (!to) {
+      if (!campaignWebhook || !to || optedOut) {
+        const reason = !campaignWebhook ? "No webhook configured" : optedOut ? "Opted out" : "Missing email"
         await supabase
           .from("email_campaign_contacts")
-          .update({ status: "failed", attempts: 1, last_error: "Missing email for campaign" })
+          .update({ status: "failed", attempts: 1, last_error: reason })
           .eq("id", row.id)
-        skippedNoEmail += 1
+        skippedNoEmail += !to ? 1 : 0
+        failedCount += to ? 1 : 0
         continue
       }
 
@@ -137,11 +121,12 @@ export async function POST() {
         })
 
         if (!resp.ok) {
-          const txt = await resp.text()
+          const txt = await resp.text().catch(() => "")
           await supabase
             .from("email_campaign_contacts")
             .update({ status: "failed", attempts: 1, last_error: `HTTP ${resp.status}: ${txt}`.slice(0, 1000) })
             .eq("id", row.id)
+          failedCount += 1
         } else {
           await supabase
             .from("email_campaign_contacts")
@@ -158,7 +143,6 @@ export async function POST() {
         failedCount += 1
       }
 
-      // Enforce configurable pacing between each email
       await sleep(intervalMs)
     }
   

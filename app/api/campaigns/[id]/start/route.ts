@@ -1,111 +1,134 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { isValidPhone, normalizePhone } from "@/lib/phone"
 
+/**
+ * Start/seed campaign:
+ * - Activate campaign and optionally set campaign-specific webhook_url
+ * - Populate campaign_contacts from batch_contacts for this campaign, idempotently
+ * - Apply unified phone normalization/validation and mark invalid upfront
+ * - Avoid RPC RETURN issues by not using RPCs; use set-based selects + batched inserts
+ * - Ensure queued vs invalid counts are accurate
+ */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const supabase = await createClient()
   const campaignId = params.id
 
+  // parse optional webhook_url
   let webhook_url: unknown = undefined
   try {
     const body = await req.json()
     webhook_url = body?.webhook_url
   } catch {
-    // no body provided; treat as optional
+    // no body provided; optional
   }
 
+  // 1) Activate campaign (and optionally set webhook_url)
   const update: any = { status: "active" }
   if (typeof webhook_url === "string" && webhook_url.trim().length > 0) {
     update.webhook_url = webhook_url.trim()
   }
-
-  // 1) Activate campaign (and optionally set webhook_url)
-  const { error: upErr } = await supabase
-    .from("campaigns")
-    .update(update)
-    .eq("id", campaignId)
+  const { error: upErr } = await supabase.from("campaigns").update(update).eq("id", campaignId)
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 })
 
-  // 2) Seed campaign_contacts idempotently WITHOUT calling the SQL function (avoid DB error; do not edit SQL)
-  // This mirrors the logic inside populate_campaign_contacts:
-  // campaign_batches -> batch_contacts, excluding already present pairs
-  // Note: Supabase JS does not support INSERT ... SELECT directly, so we fetch ids then bulk insert.
-  // For large batches, we do it in pages to avoid memory spikes.
-  const PAGE_SIZE = 1000
-  let insertedTotal = 0
-  let offset = 0
-
-  // We will fetch candidate contact_ids via a server-side SQL RPC-like select using PostgREST:
-  // Use a view from client side: select distinct contact_id from batch_contacts join campaign_batches where campaign_id = campaignId
-  // Since we cannot create SQL, we replicate with two-step fetches.
-
-  // Step A: Fetch all batch_ids linked to this campaign
+  // 2) Discover batches for this campaign
   const { data: campaignBatches, error: cbErr } = await supabase
     .from("campaign_batches")
     .select("batch_id")
     .eq("campaign_id", campaignId)
 
   if (cbErr) {
-    // Non-fatal: allow start to succeed even if seeding fails; dispatcher can seed later
     return NextResponse.json({ success: true, warning: "Failed to load campaign batches for seeding", details: cbErr.message })
   }
-
-  const batchIds = (campaignBatches || []).map((b: any) => b.batch_id)
+  const batchIds: string[] = (campaignBatches || []).map((b: any) => b.batch_id)
   if (batchIds.length === 0) {
-    return NextResponse.json({ success: true, seeded: 0 })
+    return NextResponse.json({ success: true, seeded: 0, invalid: 0, skipped_duplicates: 0 })
   }
 
-  // Helper to chunk an array
+  // helper
   const chunk = <T,>(arr: T[], size: number) => {
     const out: T[][] = []
     for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
     return out
   }
 
-  // Fetch candidate contact_ids per batch in chunks, compare against existing rows, then bulk insert missing pairs
+  // 3) Load batch_contacts for these batches
+  // We need phone numbers and opted_out flags to validate. Pull contacts.
+  let insertedQueued = 0
+  let insertedInvalid = 0
+  let skippedDuplicates = 0
+
   for (const batchChunk of chunk(batchIds, 25)) {
-    // Get distinct contact_ids for this set of batches
-    const { data: batchContacts, error: bcErr } = await supabase
+    const { data: bcRows, error: bcErr } = await supabase
       .from("batch_contacts")
       .select("contact_id, batch_id")
       .in("batch_id", batchChunk)
 
-    if (bcErr) {
-      // Skip on error; continue seeding others
-      continue
-    }
+    if (bcErr) continue
+    const contactIds = Array.from(new Set((bcRows || []).map((r: any) => r.contact_id)))
+    if (contactIds.length === 0) continue
 
-    // Deduplicate contact_ids across batches
-    const candidateIds = Array.from(new Set((batchContacts || []).map((r: any) => r.contact_id)))
+    // Fetch contacts
+    const { data: contacts, error: cErr } = await supabase
+      .from("contacts")
+      .select("id, phone, opted_out")
+      .in("id", contactIds)
 
-    if (candidateIds.length === 0) continue
+    if (cErr) continue
 
-    // Get existing campaign_contacts for these contact_ids
-    const { data: existingRows, error: existErr } = await supabase
+    // Already present in campaign_contacts?
+    const { data: existing, error: eErr } = await supabase
       .from("campaign_contacts")
-      .select("contact_id")
+      .select("contact_id, status")
       .eq("campaign_id", campaignId)
-      .in("contact_id", candidateIds)
+      .in("contact_id", contactIds)
 
-    if (existErr) {
-      // Skip on error
-      continue
+    if (eErr) continue
+    const existingById = new Map<string, string>((existing || []).map((r: any) => [r.contact_id, r.status]))
+
+    // Build inserts grouped by intended status
+    const toQueue: Array<{ campaign_id: string; contact_id: string }> = []
+    const toInvalid: Array<{ campaign_id: string; contact_id: string; last_error: string; status: string }> = []
+
+    for (const c of contacts || []) {
+      if (existingById.has(c.id)) {
+        skippedDuplicates += 1
+        continue
+      }
+      const normalized = normalizePhone(c.phone)
+      const valid = !!normalized && isValidPhone(normalized)
+      const optedOut = !!c.opted_out
+
+      if (!valid || optedOut) {
+        toInvalid.push({
+          campaign_id: campaignId,
+          contact_id: c.id,
+          last_error: !valid ? "Invalid phone" : "Opted out",
+          status: "failed", // mark as failed to surface on UI invalid bucket
+        })
+      } else {
+        toQueue.push({ campaign_id: campaignId, contact_id: c.id })
+      }
     }
 
-    const existingIds = new Set((existingRows || []).map((r: any) => r.contact_id))
-    const toInsert = candidateIds
-      .filter((id) => !existingIds.has(id))
-      .map((contact_id) => ({ campaign_id: campaignId, contact_id }))
+    // Insert queued
+    for (const insChunk of chunk(toQueue, 1000)) {
+      const { error: insErr } = await supabase.from("campaign_contacts").insert(insChunk)
+      if (!insErr) insertedQueued += insChunk.length
+    }
 
-    if (toInsert.length > 0) {
-      // Insert in sub-batches to respect payload limits
-      for (const insChunk of chunk(toInsert, 1000)) {
-        const { error: insErr } = await supabase.from("campaign_contacts").insert(insChunk)
-        if (!insErr) {
-          insertedTotal += insChunk.length
-        }
-      }
+    // Insert invalid as 'failed' with reason
+    for (const invChunk of chunk(toInvalid, 1000)) {
+      const { error: invErr } = await supabase.from("campaign_contacts").insert(invChunk as any)
+      if (!invErr) insertedInvalid += invChunk.length
     }
   }
 
-  return NextResponse.json({ success: true, seeded: insertedTotal })
+  // Note: Unique index on (campaign_id, contact_id) enforces idempotency. We count duplicates as skipped.
+  return NextResponse.json({
+    success: true,
+    seeded_queued: insertedQueued,
+    seeded_invalid: insertedInvalid,
+    skipped_duplicates: skippedDuplicates
+  })
 }

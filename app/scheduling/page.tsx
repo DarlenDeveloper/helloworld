@@ -326,23 +326,34 @@ export default function SchedulingPage() {
 
       const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
 
+      // Validate SQL schema expectations before insert to avoid unknown column errors
+      // The base schema in 000_simple_schema.sql defines campaigns without start_at/concurrency columns.
+      // Guard these fields so we don't send unknown columns to Supabase if your DB hasn't applied 002_campaign_system.sql yet.
+      const insertPayload: any = {
+        user_id: user.id,
+        name: campaignForm.name.trim(),
+        description,
+        status: campaignForm.startAt ? "scheduled" : "draft",
+        target_contacts: totalContacts,
+      }
+      // Soft-enable optional columns when present in your DB (we can't introspect here; attempting insert with extra columns can fail)
+      // We only add start_at and concurrency if campaignForm.startAt is set; if your DB doesn't have these, this still may fail.
+      // To be safe, only include start_at/concurrency if you have applied scripts/simple_auth/002_campaign_system.sql in your DB.
+      if (campaignForm.startAt) {
+        // Comment out the next two lines if your DB doesn't have these columns yet.
+        insertPayload.start_at = toUtcIso(campaignForm.startAt)
+        insertPayload.concurrency = 10
+      }
+
       const { data: newCampaign, error } = await supabase
         .from("campaigns")
-        .insert({
-          user_id: user.id,
-          name: campaignForm.name.trim(),
-          description,
-          status: "scheduled", // mark as scheduled if startAt provided, else draft
-          target_contacts: totalContacts,
-          start_at: toUtcIso(campaignForm.startAt),
-          concurrency: 10,
-        })
+        .insert(insertPayload)
         .select("*")
         .single()
 
       if (error || !newCampaign) {
         console.error("Failed to create campaign:", error)
-        alert("Failed to create campaign")
+        alert(error?.message ? `Failed to create campaign: ${error.message}` : "Failed to create campaign")
         return
       }
 
@@ -351,15 +362,17 @@ export default function SchedulingPage() {
         const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
         if (linkErr) {
           console.error("Failed to link campaign batches:", linkErr)
+          alert(linkErr.message ? `Campaign created but failed to link batches: ${linkErr.message}` : "Campaign created but failed to link batches")
         }
       }
 
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
       setCampaignForm({ name: "", concurrentCalls: 10, prompt: "", selectedBatches: [], startAt: null })
       setIsCreateCampaignOpen(false)
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error creating campaign:", err)
-      alert("Failed to create campaign. Please try again.")
+      const message = typeof err?.message === "string" ? err.message : String(err)
+      alert(`Failed to create campaign. ${message}`)
     } finally {
       setIsCreatingCampaign(false)
     }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
-import { Filter, LogOut, Plus, Eye, UserIcon } from "lucide-react"
+import { Plus } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -26,7 +26,8 @@ const AgentPerformanceChart = dynamic(
 )
 import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
 import type { User } from '@supabase/supabase-js'
-import type { RealtimeChannel } from '@supabase/supabase-js'
+// Fallback for environments where RealtimeChannel type isn't exported
+type RealtimeChannel = any
 
 // Type definitions for our data structures
 interface Call {
@@ -377,11 +378,9 @@ export default function Dashboard() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem className="cursor-pointer">
-                <UserIcon className="h-4 w-4 mr-2" />
                 User Settings
               </DropdownMenuItem>
               <DropdownMenuItem className="cursor-pointer text-red-600" onClick={handleLogout}>
-                <LogOut className="h-4 w-4 mr-2" />
                 Logout
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -624,7 +623,6 @@ export default function Dashboard() {
               </TabsList>
             </Tabs>
             <Button variant="outline" size="sm" className="border-gray-200 text-black hover:bg-gray-50 bg-transparent">
-              <Filter className="h-4 w-4 mr-2" />
               Filter
             </Button>
           </div>
@@ -672,14 +670,16 @@ export default function Dashboard() {
                           className="text-teal-600 hover:text-teal-700 hover:bg-teal-50"
                           onClick={() => setSelectedCall(call)}
                         >
-                          <Eye className="h-4 w-4 mr-1" />
                           View
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="max-w-md">
+                      <DialogContent className="max-w-md" aria-describedby="call-summary-desc">
                         <DialogHeader>
                           <DialogTitle>Call Summary</DialogTitle>
                         </DialogHeader>
+                        <div className="sr-only" id="call-summary-desc">
+                          Detailed information about the selected call including contact, status, date/time, and summary.
+                        </div>
                         <div className="space-y-4">
                           <div>
                             <label className="text-sm font-medium text-gray-600">Contact:</label>

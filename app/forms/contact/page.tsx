@@ -1,8 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Calendar, Search, Bell } from "lucide-react"
-import { DayPicker } from "react-day-picker"
+import { Calendar, Search } from "lucide-react"
+import { DayPicker, type DateRange } from "react-day-picker"
 import "react-day-picker/dist/style.css"
 import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,7 +30,7 @@ export default function WebFormsPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedForm, setSelectedForm] = useState("all")
   const [formOptions, setFormOptions] = useState<string[]>(["all"])
-  const [selectedRange, setSelectedRange] = useState<{ from?: Date; to?: Date }>(() => {
+  const [selectedRange, setSelectedRange] = useState<DateRange | undefined>(() => {
     const end = new Date()
     const start = new Date()
     start.setDate(end.getDate() - 6)
@@ -77,7 +77,7 @@ export default function WebFormsPage() {
     setIsCalendarOpen(false)
   }
   function applyRange() {
-    if (selectedRange.from && selectedRange.to) {
+    if (selectedRange && selectedRange.from && selectedRange.to) {
       setRangeLabel(`${formatDate(selectedRange.from)} - ${formatDate(selectedRange.to)}`)
     } else {
       setRangeLabel('All time')
@@ -151,7 +151,7 @@ export default function WebFormsPage() {
         (r.form_name || "Unnamed Form").toLowerCase() === selectedForm.toLowerCase()
 
       const matchesDate = (() => {
-        if (!selectedRange.from || !selectedRange.to) return true
+        if (!selectedRange || !selectedRange.from || !selectedRange.to) return true
         const start = startOfDay(selectedRange.from).getTime()
         const end = endOfDay(selectedRange.to).getTime()
         const ts = new Date(r.submitted_at || r.created_at || Date.now()).getTime()
@@ -177,14 +177,11 @@ export default function WebFormsPage() {
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold text-black">Web Forms</h1>
-          <div className="flex items-center">
-            <Bell className="h-5 w-5 text-gray-600" />
-            {newCount > 0 && (
-              <span className="ml-1">
-                <Badge variant="outline" className="border-teal-300 text-teal-700 bg-teal-50">{newCount}</Badge>
-              </span>
-            )}
-          </div>
+          {newCount > 0 && (
+            <span className="ml-1">
+              <Badge variant="outline" className="border-teal-300 text-teal-700 bg-teal-50">{newCount}</Badge>
+            </span>
+          )}
         </div>
 
         <Dialog open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -194,10 +191,13 @@ export default function WebFormsPage() {
               {rangeLabel}
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-3xl">
+          <DialogContent className="max-w-3xl" aria-describedby="date-range-desc">
             <DialogHeader>
               <DialogTitle>Select Date Range</DialogTitle>
             </DialogHeader>
+            <div className="sr-only" id="date-range-desc">
+              Choose a preset or a custom range using the calendar. Apply to filter submissions.
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <div className="text-sm font-medium text-gray-700">Presets</div>
@@ -217,10 +217,20 @@ export default function WebFormsPage() {
                   selected={selectedRange}
                   onSelect={setSelectedRange}
                   weekStartsOn={1}
-                  captionLayout="buttons"
+                  captionLayout="dropdown"
                 />
                 <div className="flex justify-end gap-2 mt-2">
-                  <Button variant="outline" className="bg-transparent" onClick={() => { setSelectedRange({}); setRangeLabel('All time'); setIsCalendarOpen(false); }}>Clear</Button>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent"
+                    onClick={() => {
+                      setSelectedRange(undefined)
+                      setRangeLabel('All time')
+                      setIsCalendarOpen(false)
+                    }}
+                  >
+                    Clear
+                  </Button>
                   <Button onClick={applyRange} className="bg-teal-500 hover:bg-teal-600">Apply</Button>
                 </div>
               </div>

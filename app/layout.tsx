@@ -23,16 +23,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <style>{`
-html {
-  font-family: ${GeistSans.style.fontFamily};
-  --font-sans: ${GeistSans.variable};
-  --font-mono: ${GeistMono.variable};
-}
-        `}</style>
-      </head>
-      <body suppressHydrationWarning>
+      <head />
+      <body suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
         <ConditionalLayout>{children}</ConditionalLayout>
       </body>
     </html>

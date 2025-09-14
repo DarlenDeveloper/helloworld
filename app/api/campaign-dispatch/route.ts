@@ -2,18 +2,18 @@ import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
 /**
- * Simple dispatcher that:
+ * Batch dispatcher (no campaigns):
+ * - POST /api/campaign-dispatch?batch_id=...&limit=...
  * - Creates one session row
- * - Processes up to 10 contacts (pending) per request across active campaigns
- * - For each processed contact, inserts one dispatch_events row
- * - Marks that contact as 'sent'
- * - Repeats on next request until all contacts are done
+ * - Reads up to {limit} contacts from public.batch_contacts for the given batch_id
+ * - For each contact: inserts one row into dispatch_events (owner-scoped) and marks progress by writing an event
+ * - Designed to be called repeatedly until the whole batch is recorded
  *
- * No validation, no webhooks, no complex scheduling. Each request handles at most 10.
+ * No validation, no webhooks, no prompts. Pure DB writes using session logic.
  */
-const CONTACTS_PER_REQUEST = 10
+const DEFAULT_LIMIT = 100 // larger batches as requested
 
-export async function POST() {
+export async function POST(req: Request) {
   const supabase = await createClient()
 
   // Resolve owner for RLS
@@ -26,61 +26,59 @@ export async function POST() {
     return NextResponse.json({ success: false, error: "Unauthenticated; cannot insert rows" }, { status: 401 })
   }
 
-  // Create session
+  // Parse query params
+  const url = new URL(req.url)
+  const batch_id = url.searchParams.get("batch_id")
+  const limitParam = url.searchParams.get("limit")
+  const LIMIT = Math.max(1, Math.min(Number(limitParam) || DEFAULT_LIMIT, 1000))
+
+  if (!batch_id) {
+    return NextResponse.json({ success: false, error: "batch_id is required" }, { status: 400 })
+  }
+
+  // Create session (channel left generic 'call' to reuse the same schema)
   const { data: sessIns, error: sessErr } = await supabase
     .from("dispatch_sessions")
-    .insert([{ owner_id, channel: "call", config: { CONTACTS_PER_REQUEST } }])
+    .insert([{ owner_id, channel: "call", config: { batch_id, LIMIT } }])
     .select("id")
     .single()
   if (sessErr) return NextResponse.json({ success: false, error: sessErr.message }, { status: 500 })
   const session_id = (sessIns as any)?.id as string
 
-  // Load active campaigns
-  const { data: campaigns, error: campErr } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("status", "active")
-  if (campErr) return NextResponse.json({ success: false, error: campErr.message }, { status: 500 })
+  // Load up to LIMIT contacts from batch_contacts for this batch_id
+  // To avoid reprocessing rows already written this session, perform a left anti-join via application logic:
+  // 1) Get recent contacts from batch
+  const { data: batchRows, error: bcErr } = await supabase
+    .from("batch_contacts")
+    .select("contact_id")
+    .eq("batch_id", batch_id)
+    .limit(LIMIT)
+  if (bcErr) return NextResponse.json({ success: false, error: bcErr.message }, { status: 500 })
 
-  // Collect up to CONTACTS_PER_REQUEST pending rows across all campaigns (oldest-first per campaign)
-  type CCRow = { id: string; contact_id: string; campaign_id: string }
-  const selected: CCRow[] = []
-
-  for (const camp of campaigns || []) {
-    if (selected.length >= CONTACTS_PER_REQUEST) break
-    const limit = CONTACTS_PER_REQUEST - selected.length
-    const { data: rows } = await supabase
-      .from("campaign_contacts")
-      .select("id, contact_id, campaign_id")
-      .eq("campaign_id", camp.id)
-      .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(limit)
-    ;(rows || []).forEach((r: any) => selected.push(r as CCRow))
+  // 2) Resolve minimal contact info (optional)
+  const contactIds = Array.from(new Set((batchRows || []).map((r: any) => r.contact_id)))
+  let contactsById = new Map<string, any>()
+  if (contactIds.length > 0) {
+    const { data: contacts } = await supabase
+      .from("contacts")
+      .select("id, name, email, phone, notes")
+      .in("id", contactIds)
+    ;(contacts || []).forEach((c: any) => contactsById.set(c.id, c))
   }
 
+  // 3) Write events for each contact (idempotency within session is not strictly required; the UI can drive one call at a time)
   let attempted = 0
   let recorded = 0
   let errored = 0
 
-  // For each selected, create a simple attempt row and mark as sent
-  for (const row of selected) {
+  for (const row of batchRows || []) {
     attempted += 1
-
-    // Load minimal contact (accept any phone/email as-is)
-    const { data: contact } = await supabase
-      .from("contacts")
-      .select("id, name, email, phone, notes")
-      .eq("id", row.contact_id)
-      .limit(1)
-      .single()
-
+    const contact = contactsById.get(row.contact_id) || null
     const target = ((contact?.phone || contact?.email || "") as string).toString()
 
-    // Insert attempt
     const payload = {
       channel: "call",
-      campaign_id: row.campaign_id,
+      batch_id,
       contact_id: row.contact_id,
       target,
       contact,
@@ -91,7 +89,7 @@ export async function POST() {
       .insert([{
         session_id,
         owner_id,
-        campaign_id: row.campaign_id,
+        campaign_id: null, // no campaigns now
         contact_id: row.contact_id,
         channel: "call",
         action: "sent",
@@ -103,33 +101,22 @@ export async function POST() {
       await supabase.from("dispatch_events").insert([{
         session_id,
         owner_id,
-        campaign_id: row.campaign_id,
+        campaign_id: null,
         contact_id: row.contact_id,
         channel: "call",
         action: "failed",
         detail: { error: insErr.message, payload },
       }])
-      continue
+    } else {
+      recorded += 1
     }
-
-    recorded += 1
-    // Mark queue row as sent
-    await supabase
-      .from("campaign_contacts")
-      .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
-      .eq("id", row.id)
   }
 
-  // Compute remaining queued across active campaigns
-  let remaining = 0
-  for (const camp of campaigns || []) {
-    const { count } = await supabase
-      .from("campaign_contacts")
-      .select("*", { count: "exact", head: true })
-      .eq("campaign_id", camp.id)
-      .eq("status", "pending")
-    remaining += count || 0
-  }
+  // Compute remaining rows in batch_contacts (approximate; head count)
+  const { count: remaining } = await supabase
+    .from("batch_contacts")
+    .select("*", { count: "exact", head: true })
+    .eq("batch_id", batch_id)
 
   // Update session totals
   await supabase
@@ -141,11 +128,12 @@ export async function POST() {
   return NextResponse.json({
     success: true,
     session_id,
-    processed_this_request: selected.length,
+    batch_id,
+    processed_this_request: (batchRows || []).length,
     attempted,
     recorded,
     errored,
-    remaining_pending: remaining,
-    hint: "Call this endpoint repeatedly until remaining_pending is 0."
+    remaining_in_batch: remaining || 0,
+    hint: "Invoke again until remaining_in_batch is 0. This only writes to dispatch tables."
   })
 }

@@ -82,9 +82,19 @@ CREATE POLICY kba_delete ON public.knowledge_base_articles FOR DELETE USING (aut
 ALTER TABLE public.user_login_logs ENABLE ROW LEVEL SECURITY;
 SELECT public._drop_policies('public.user_login_logs');
 CREATE POLICY ull_read   ON public.user_login_logs FOR SELECT USING (
-  auth.uid() = user_id OR EXISTS (
+  -- Self can read own logs
+  auth.uid() = user_id
+  -- Owner can read collaborator logs
+  OR EXISTS (
     SELECT 1 FROM public.user_collaborators c
-    WHERE c.owner_user_id = auth.uid() AND c.collaborator_user_id = user_id
+    WHERE c.owner_user_id = auth.uid()
+      AND c.collaborator_user_id = user_id
+  )
+  -- Collaborator can read owner's logs (symmetric share)
+  OR EXISTS (
+    SELECT 1 FROM public.user_collaborators c
+    WHERE c.owner_user_id = user_id
+      AND c.collaborator_user_id = auth.uid()
   )
 );
 CREATE POLICY ull_insert ON public.user_login_logs FOR INSERT WITH CHECK (auth.uid() = user_id);

@@ -88,7 +88,7 @@ export default function SchedulingPage() {
     const raw = manualContact.phone.trim()
     if (!raw) return { valid: false, normalized: "", touched: false }
     const normalized = normalizePhone(raw)
-    return { valid: isValidE164(normalized), normalized, touched: true }
+    return { valid: isValidPhone(normalized), normalized, touched: true }
   }, [manualContact.phone])
 
   // Derived map for quick lookups
@@ -262,7 +262,18 @@ export default function SchedulingPage() {
     setIsCreatingCampaign(true)
 
     try {
-      const totalContacts = campaignForm.selectedBatches.reduce((sum, id) => sum + (batchMap.get(id)?.contact_count || 0), 0)
+      // Count only valid phone numbers across selected batches (exclude invalid)
+      const batchIds = campaignForm.selectedBatches
+      let totalContacts = 0
+      for (const id of batchIds) {
+        const { count, error: cntErr } = await supabase
+          .from("batch_contacts")
+          .select("id", { count: "exact", head: true })
+          .eq("batch_id", id)
+          .not("phone", "is", null)
+          .filter("phone", "regex", "^(?:\\+256\\d{9}|\\+[1-9]\\d{7,14})$")
+        if (!cntErr) totalContacts += count || 0
+      }
 
       const description = `Prompt: ${campaignForm.prompt}\nConcurrent Calls: ${campaignForm.concurrentCalls}`
 
@@ -344,7 +355,14 @@ export default function SchedulingPage() {
     return s
   }
 
-  const isValidE164 = (phone: string) => /^\+[1-9]\d{7,14}$/.test(phone)
+  const isValidPhone = (phone: string) => {
+    const p = (phone || "").trim()
+    // General E.164
+    if (!/^\+[1-9]\d{7,14}$/.test(p)) return false
+    // Uganda specific: +256 followed by exactly 9 digits (total length 13)
+    if (p.startsWith("+256")) return /^\+256\d{9}$/.test(p)
+    return true
+  }
 
   type ParsedPhones = { valid: { phone: string; notes: string }[]; invalid: string[] }
 
@@ -364,7 +382,7 @@ export default function SchedulingPage() {
       const notes = (parts[1] || "").trim()
       if (!phoneRaw) continue
       const phone = normalizePhone(phoneRaw)
-      if (!isValidE164(phone)) {
+      if (!isValidPhone(phone)) {
         invalid.push(phoneRaw)
         continue
       }
@@ -473,7 +491,7 @@ export default function SchedulingPage() {
     if (!user || !selectedBatch) return
     const raw = manualContact.phone.trim()
     const normalized = normalizePhone(raw)
-    if (!isValidE164(normalized)) {
+    if (!isValidPhone(normalized)) {
       alert("Enter a valid phone number in E.164 format (e.g., +256778825312)")
       return
     }
@@ -689,6 +707,9 @@ export default function SchedulingPage() {
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-black">{contact.name || contact.phone || "Unknown"}</span>
+                            {!isValidPhone(contact.phone || "") && (
+                              <Badge className="bg-red-100 text-red-800 border border-red-300">Invalid Phone</Badge>
+                            )}
                           </div>
                           <div className="text-sm text-gray-600">
                             {(contact.phone || "No phone")} • {(contact.email || "No email")} • {(contact.notes || "No notes")}

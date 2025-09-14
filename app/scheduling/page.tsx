@@ -79,18 +79,28 @@ export default function SchedulingPage() {
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
 
-  // Manual add dialog state
-  const [isAddContactOpen, setIsAddContactOpen] = useState(false)
-  const [manualContact, setManualContact] = useState<{ name: string; phone: string; email: string; notes: string }>(
+  // Single Caller Campaign dialog state
+  const [isSingleCallerOpen, setIsSingleCallerOpen] = useState(false)
+  const [singleContact, setSingleContact] = useState<{ name: string; phone: string; email: string; notes: string }>(
     { name: "", phone: "", email: "", notes: "" }
   )
+  const [singleCampaignForm, setSingleCampaignForm] = useState<{
+    name: string
+    prompt: string
+    startAt: Date | null
+  }>({
+    name: "",
+    prompt: "",
+    startAt: null,
+  })
+  const [creatingSingle, setCreatingSingle] = useState(false)
 
   const phoneValidation = useMemo(() => {
-    const raw = manualContact.phone.trim()
+    const raw = singleContact.phone.trim()
     if (!raw) return { valid: false, normalized: "", touched: false }
     const normalized = normalizePhone(raw)
     return { valid: isValidPhone(normalized), normalized, touched: true }
-  }, [manualContact.phone])
+  }, [singleContact.phone])
 
   // Derived map for quick lookups
   const batchMap = useMemo(() => {
@@ -491,51 +501,101 @@ export default function SchedulingPage() {
     }
   }
 
-  const handleAddContact = async () => {
-    if (!user || !selectedBatch) return
-    const raw = manualContact.phone.trim()
-    const normalized = normalizePhone(raw)
-    if (!isValidPhone(normalized)) {
+  // Create a single-contact caller campaign by creating an ephemeral batch and linking it
+  const handleCreateSingleCallerCampaign = async () => {
+    if (!user) return
+    if (!phoneValidation.valid) {
       alert("Enter a valid phone number in E.164 format (e.g., +256778825312)")
       return
     }
+    if (!singleCampaignForm.name.trim()) {
+      alert("Campaign name is required")
+      return
+    }
+    if (!singleCampaignForm.prompt.trim()) {
+      alert("Campaign prompt is required")
+      return
+    }
 
+    setCreatingSingle(true)
     try {
-      const { data: inserted, error } = await supabase
+      const normalized = phoneValidation.normalized
+
+      // 1) Insert contact
+      const { data: contactRow, error: contactErr } = await supabase
         .from("contacts")
         .insert({
           user_id: user.id,
-          name: manualContact.name.trim() || null,
-          email: manualContact.email.trim() || null,
+          name: singleContact.name.trim() || null,
+          email: singleContact.email.trim() || null,
           phone: normalized,
-          notes: manualContact.notes.trim() || null,
+          notes: singleContact.notes.trim() || null,
         })
         .select("id")
         .single()
+      if (contactErr || !contactRow) throw contactErr || new Error("Failed to insert contact")
 
-      if (error || !inserted) {
-        console.error("Failed to add contact:", error)
-        alert("Failed to add contact")
-        return
-      }
+      // 2) Create ephemeral batch
+      const batchName = `Single Contact ${normalized}`
+      const { data: batchRow, error: batchErr } = await supabase
+        .from("contact_batches")
+        .insert({
+          user_id: user.id,
+          name: batchName,
+          description: "single=true",
+          contact_count: 1,
+        })
+        .select("*")
+        .single()
+      if (batchErr || !batchRow) throw batchErr || new Error("Failed to create single-contact batch")
 
-      const { error: linkErr } = await supabase
+      // 3) Snapshot into batch_contacts
+      const { error: snapshotErr } = await supabase
         .from("batch_contacts")
-        .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email: manualContact.email || null, phone: normalized, notes: manualContact.notes || null })
-      if (linkErr) {
-        console.error("Failed linking contact to batch:", linkErr)
-        alert("Failed to link contact to batch")
-        return
-      }
+        .insert({
+          batch_id: batchRow.id,
+          contact_id: contactRow.id,
+          name: singleContact.name.trim() || null,
+          email: singleContact.email.trim() || null,
+          phone: normalized,
+          notes: singleContact.notes.trim() || null,
+        })
+      if (snapshotErr) throw snapshotErr
 
-      // Update counts/UI
-      setContactBatches((prev) => prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + 1 } : b)))
-      await fetchBatchContacts(selectedBatch)
-      setIsAddContactOpen(false)
-      setManualContact({ name: "", phone: "", email: "", notes: "" })
+      // 4) Create campaign
+      const description = `Prompt: ${singleCampaignForm.prompt}\nConcurrent Calls: 10\nsingle=true`
+      const { data: newCampaign, error: campErr } = await supabase
+        .from("campaigns")
+        .insert({
+          user_id: user.id,
+          name: singleCampaignForm.name.trim(),
+          description,
+          status: "scheduled",
+          target_contacts: 1,
+          start_at: singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString() : null,
+          concurrency: 10,
+        })
+        .select("*")
+        .single()
+      if (campErr || !newCampaign) throw campErr || new Error("Failed to create campaign")
+
+      // 5) Link campaign -> batch
+      const { error: linkErr } = await supabase.from("campaign_batches").insert([{ campaign_id: newCampaign.id, batch_id: batchRow.id }])
+      if (linkErr) throw linkErr
+
+      // 6) Refresh UI
+      await Promise.all([
+        fetchCampaigns(user.id),
+        fetchBatches(user.id),
+      ])
+      setIsSingleCallerOpen(false)
+      setSingleContact({ name: "", phone: "", email: "", notes: "" })
+      setSingleCampaignForm({ name: "", prompt: "", startAt: null })
     } catch (e) {
-      console.error("Error adding contact:", e)
-      alert("Error adding contact")
+      console.error("Failed to create single-caller campaign:", e)
+      alert("Failed to create single-caller campaign.")
+    } finally {
+      setCreatingSingle(false)
     }
   }
 
@@ -568,6 +628,102 @@ export default function SchedulingPage() {
               <Upload className="h-4 w-4 mr-2" />
               {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
             </Button>
+            <Dialog open={isSingleCallerOpen} onOpenChange={setIsSingleCallerOpen}>
+              <DialogTrigger asChild>
+                <Button className="bg-indigo-500 hover:bg-indigo-600 text-white">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Single Caller Campaign
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl" aria-describedby="single-caller-desc">
+                <DialogHeader>
+                  <DialogTitle id="single-caller-title">Create Single Caller Campaign</DialogTitle>
+                </DialogHeader>
+                <div className="sr-only" id="single-caller-desc">
+                  Provide a single contact and campaign details to create a one-off caller campaign without using batches.
+                </div>
+                <div role="document" aria-labelledby="single-caller-title" className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor="sc-name">Name (optional)</Label>
+                      <Input id="sc-name" value={singleContact.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, name: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label htmlFor="sc-email">Email (optional)</Label>
+                      <Input id="sc-email" type="email" value={singleContact.email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, email: e.target.value }))} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label htmlFor="sc-phone">Phone *</Label>
+                      <Input id="sc-phone" placeholder="e.g., +256778825312" value={singleContact.phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, phone: e.target.value }))} />
+                      {singleContact.phone && !phoneValidation.valid && <div className="text-xs text-red-600 mt-1">Invalid phone. Use E.164 format, e.g., +256778825312</div>}
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label htmlFor="sc-notes">Notes (optional)</Label>
+                      <Textarea id="sc-notes" rows={3} value={singleContact.notes} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSingleContact((p) => ({ ...p, notes: e.target.value }))} />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="sc-campaign-name">Campaign Name *</Label>
+                    <Input id="sc-campaign-name" placeholder="Enter campaign name" value={singleCampaignForm.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="sc-prompt">Campaign Prompt *</Label>
+                    <Textarea id="sc-prompt" rows={4} placeholder="Enter the script or prompt for this campaign..." value={singleCampaignForm.prompt} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSingleCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="sc-start-date">Schedule Start</Label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <Input
+                        id="sc-start-date"
+                        type="date"
+                        value={singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString().slice(0,10) : ""}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const date = e.target.value
+                          setSingleCampaignForm((prev) => {
+                            const current = prev.startAt ? new Date(prev.startAt) : new Date()
+                            if (!date) return { ...prev, startAt: null }
+                            const [y,m,d] = date.split("-").map(Number)
+                            const next = new Date(current)
+                            next.setFullYear(y)
+                            next.setMonth((m||1)-1)
+                            next.setDate(d||1)
+                            return { ...prev, startAt: next }
+                          })
+                        }}
+                      />
+                      <Input
+                        type="time"
+                        step={60}
+                        value={singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString().slice(11,16) : ""}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const time = e.target.value
+                          setSingleCampaignForm((prev) => {
+                            if (!time) return { ...prev, startAt: prev.startAt }
+                            const [hh,mm] = time.split(":").map(Number)
+                            const base = prev.startAt ? new Date(prev.startAt) : new Date()
+                            base.setHours(hh||0, mm||0, 0, 0)
+                            return { ...prev, startAt: base }
+                          })
+                        }}
+                      />
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      If blank, campaign remains scheduled with no start; you can start it manually later. Concurrency is fixed to 10 lines.
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3">
+                    <Button variant="outline" onClick={() => setIsSingleCallerOpen(false)} disabled={creatingSingle}>Cancel</Button>
+                    <Button onClick={handleCreateSingleCallerCampaign} disabled={creatingSingle || !phoneValidation.valid} className="bg-indigo-500 hover:bg-indigo-600">
+                      {creatingSingle ? "Creating..." : "Create Single Campaign"}
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
             <Dialog open={isCreateCampaignOpen} onOpenChange={setIsCreateCampaignOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-teal-500 hover:bg-teal-600 text-white">
@@ -710,74 +866,6 @@ export default function SchedulingPage() {
                         <Upload className="h-4 w-4 mr-2" />
                         {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
                       </Button>
-                      <Dialog open={isAddContactOpen} onOpenChange={setIsAddContactOpen}>
-                        <DialogTrigger asChild>
-                          <Button variant="outline" size="sm">
-                            <Plus className="h-4 w-4 mr-2" />
-                            Add Contact
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-w-md" aria-describedby="add-contact-desc">
-                          <DialogHeader>
-                            <DialogTitle id="add-contact-title">Add Contact</DialogTitle>
-                          </DialogHeader>
-                          <div className="sr-only" id="add-contact-desc">
-                            Enter the contact details including phone number in E.164 format, optionally name, email, and notes.
-                          </div>
-                          <div role="document" aria-labelledby="add-contact-title" className="space-y-3">
-                            <div>
-                              <Label htmlFor="add-name">Name (optional)</Label>
-                              <Input
-                                id="add-name"
-                                value={manualContact.name}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                  setManualContact((p) => ({ ...p, name: e.target.value }))
-                                }
-                              />
-                            </div>
-                            <div>
-                              <Label htmlFor="add-phone">Phone *</Label>
-                              <Input
-                                id="add-phone"
-                                value={manualContact.phone}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                  setManualContact((p) => ({ ...p, phone: e.target.value }))
-                                }
-                                placeholder="e.g., +256778825312"
-                              />
-                              {manualContact.phone && !phoneValidation.valid && (
-                                <div className="text-xs text-red-600 mt-1">Invalid phone. Use E.164 format, e.g., +256778825312</div>
-                              )}
-                            </div>
-                            <div>
-                              <Label htmlFor="add-email">Email (optional)</Label>
-                              <Input
-                                id="add-email"
-                                type="email"
-                                value={manualContact.email}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                  setManualContact((p) => ({ ...p, email: e.target.value }))
-                                }
-                              />
-                            </div>
-                            <div>
-                              <Label htmlFor="add-notes">Notes (optional)</Label>
-                              <Textarea
-                                id="add-notes"
-                                rows={3}
-                                value={manualContact.notes}
-                                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                                  setManualContact((p) => ({ ...p, notes: e.target.value }))
-                                }
-                              />
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>Cancel</Button>
-                              <Button onClick={handleAddContact} className="bg-teal-500 hover:bg-teal-600" disabled={!phoneValidation.valid}>Add</Button>
-                            </div>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
                     </div>
                   </div>
                 </CardHeader>

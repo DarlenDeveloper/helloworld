@@ -89,11 +89,6 @@ export default function EmailSchedulingPage() {
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
 
-  // Manual add dialog state
-  const [isAddContactOpen, setIsAddContactOpen] = useState(false)
-  const [manualContact, setManualContact] = useState<{ name: string; phone: string; email: string; notes: string }>(
-    { name: "", phone: "", email: "", notes: "" }
-  )
 
   // Derived map for quick lookups
   const batchMap = useMemo(() => {
@@ -465,52 +460,6 @@ export default function EmailSchedulingPage() {
     }
   }
 
-  const handleAddContact = async () => {
-    if (!user || !selectedBatch) return
-    const email = (manualContact.email || "").trim()
-    if (!/^\S+@\S+\.[\w-]+$/.test(email)) {
-      alert("Enter a valid email address")
-      return
-    }
-
-    try {
-      const { data: inserted, error } = await supabase
-        .from("contacts")
-        .insert({
-          user_id: user.id,
-          name: manualContact.name.trim() || null,
-          email,
-          phone: null,
-          notes: manualContact.notes.trim() || null,
-        })
-        .select("id")
-        .single()
-
-      if (error || !inserted) {
-        console.error("Failed to add contact:", error)
-        alert("Failed to add contact")
-        return
-      }
-
-      const { error: linkErr } = await supabase
-        .from("email_batch_contacts")
-        .insert({ batch_id: selectedBatch, contact_id: inserted.id, name: manualContact.name || null, email, phone: null, notes: manualContact.notes || null })
-      if (linkErr) {
-        console.error("Failed linking contact to batch:", linkErr)
-        alert("Failed to link contact to batch")
-        return
-      }
-
-      // Update counts/UI
-      setContactBatches((prev) => prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + 1 } : b)))
-      await fetchBatchContacts(selectedBatch)
-      setIsAddContactOpen(false)
-      setManualContact({ name: "", phone: "", email: "", notes: "" })
-    } catch (e) {
-      console.error("Error adding contact:", e)
-      alert("Error adding contact")
-    }
-  }
 
   if (loading) {
     return (
@@ -569,7 +518,7 @@ export default function EmailSchedulingPage() {
                   {/* Campaign Name */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-name">Campaign Name *</Label>
-                    <Input id="campaign-name" placeholder="Enter campaign name" value={campaignForm.name} onChange={(e) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
+                    <Input id="campaign-name" placeholder="Enter campaign name" value={campaignForm.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
                   </div>
 
                   {/* Contact Batches */}
@@ -581,7 +530,7 @@ export default function EmailSchedulingPage() {
                       )}
                       {contactBatches.map((batch) => (
                         <div key={batch.id} className="flex items-center space-x-2">
-                          <Checkbox id={`batch-${batch.id}`} checked={campaignForm.selectedBatches.includes(batch.id)} onCheckedChange={(checked) => handleBatchSelection(batch.id, checked as boolean)} />
+                          <Checkbox id={`batch-${batch.id}`} checked={campaignForm.selectedBatches.includes(batch.id)} onCheckedChange={(checked: boolean | "indeterminate") => handleBatchSelection(batch.id, Boolean(checked) && checked !== "indeterminate")} />
                           <Label htmlFor={`batch-${batch.id}`} className="flex-1 cursor-pointer">
                             {batch.name} ({batch.contact_count} contacts)
                           </Label>
@@ -593,19 +542,19 @@ export default function EmailSchedulingPage() {
                   {/* Email Subject */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-subject">Email Subject *</Label>
-                    <Input id="campaign-subject" placeholder="Subject line" value={campaignForm.subject} onChange={(e) => setCampaignForm((prev) => ({ ...prev, subject: e.target.value }))} />
+                    <Input id="campaign-subject" placeholder="Subject line" value={campaignForm.subject} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCampaignForm((prev) => ({ ...prev, subject: e.target.value }))} />
                   </div>
 
                   {/* Email Body */}
                   <div className="space-y-2">
                     <Label htmlFor="campaign-body">Email Body *</Label>
-                    <Textarea id="campaign-body" placeholder="Write your email body (supports variables like {{name}})" rows={6} value={campaignForm.body} onChange={(e) => setCampaignForm((prev) => ({ ...prev, body: e.target.value }))} />
+                    <Textarea id="campaign-body" placeholder="Write your email body (supports variables like {{name}})" rows={6} value={campaignForm.body} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCampaignForm((prev) => ({ ...prev, body: e.target.value }))} />
                   </div>
 
                   {/* Send interval */}
                   <div className="space-y-2">
                     <Label htmlFor="send-interval">Send interval (seconds)</Label>
-                    <Input id="send-interval" type="number" min={1} step={1} value={campaignForm.sendIntervalSeconds} onChange={(e) => setCampaignForm((prev) => ({ ...prev, sendIntervalSeconds: Math.max(1, Number(e.target.value) || 1) }))} />
+                    <Input id="send-interval" type="number" min={1} step={1} value={campaignForm.sendIntervalSeconds} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCampaignForm((prev) => ({ ...prev, sendIntervalSeconds: Math.max(1, Number(e.target.value) || 1) }))} />
                     <div className="text-xs text-gray-500">One email will be sent every <span className="font-medium">{campaignForm.sendIntervalSeconds}</span> second(s).</div>
                   </div>
 
@@ -642,41 +591,6 @@ export default function EmailSchedulingPage() {
                         <Upload className="h-4 w-4 mr-2" />
                         {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
                       </Button>
-                      <Dialog open={isAddContactOpen} onOpenChange={setIsAddContactOpen}>
-                        <DialogTrigger asChild>
-                          <Button variant="outline" size="sm">
-                            <Plus className="h-4 w-4 mr-2" />
-                            Add Contact
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-w-md">
-                          <DialogHeader>
-                            <DialogTitle>Add Contact</DialogTitle>
-                          </DialogHeader>
-                          <div className="space-y-3">
-                            <div>
-                              <Label htmlFor="add-name">Name (optional)</Label>
-                              <Input id="add-name" value={manualContact.name} onChange={(e) => setManualContact((p) => ({ ...p, name: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label htmlFor="add-email">Email *</Label>
-                              <Input id="add-email" type="email" value={manualContact.email} onChange={(e) => setManualContact((p) => ({ ...p, email: e.target.value }))} placeholder="e.g., johndoe@example.com" />
-                            </div>
-                            <div>
-                              <Label htmlFor="add-phone">Phone (optional)</Label>
-                              <Input id="add-phone" value={manualContact.phone} onChange={(e) => setManualContact((p) => ({ ...p, phone: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label htmlFor="add-notes">Notes (optional)</Label>
-                              <Textarea id="add-notes" rows={3} value={manualContact.notes} onChange={(e) => setManualContact((p) => ({ ...p, notes: e.target.value }))} />
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>Cancel</Button>
-                              <Button onClick={handleAddContact} className="bg-teal-500 hover:bg-teal-600">Add</Button>
-                            </div>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
                     </div>
                   </div>
                 </CardHeader>
@@ -726,10 +640,10 @@ export default function EmailSchedulingPage() {
                           <div className="text-sm text-gray-600">{batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}</div>
                         </div>
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); const newName = prompt("Enter new batch name:", batch.name); if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim()) }}>
+                          <Button variant="ghost" size="sm" onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); const newName = prompt("Enter new batch name:", batch.name); if (newName && newName.trim()) handleRenameBatch(batch.id, newName.trim()) }}>
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="text-red-600" onClick={(e) => { e.stopPropagation(); handleDeleteBatch(batch.id) }}>
+                          <Button variant="ghost" size="sm" className="text-red-600" onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); handleDeleteBatch(batch.id) }}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>

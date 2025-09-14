@@ -16,6 +16,43 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 
+// Local date/time helpers to avoid UTC shifts in inputs
+function pad2(n: number) { return n.toString().padStart(2, "0") }
+function formatDateLocal(d: Date | null): string {
+  if (!d) return ""
+  const yr = d.getFullYear()
+  const mo = pad2(d.getMonth() + 1)
+  const da = pad2(d.getDate())
+  return `${yr}-${mo}-${da}`
+}
+function formatTimeLocal(d: Date | null): string {
+  if (!d) return ""
+  const hh = pad2(d.getHours())
+  const mm = pad2(d.getMinutes())
+  return `${hh}:${mm}`
+}
+// Convert a pair of local date string (YYYY-MM-DD) and time string (HH:mm) with an existing base Date to a new Date object in local time
+function mergeLocalDate(base: Date | null, dateStr: string): Date | null {
+  if (!dateStr) return null
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const b = base ? new Date(base) : new Date()
+  b.setFullYear(y)
+  b.setMonth((m || 1) - 1)
+  b.setDate(d || 1)
+  return b
+}
+function mergeLocalTime(base: Date | null, timeStr: string): Date | null {
+  if (!timeStr) return base
+  const [hh, mm] = timeStr.split(":").map(Number)
+  const b = base ? new Date(base) : new Date()
+  b.setHours(hh || 0, mm || 0, 0, 0)
+  return b
+}
+// Normalize to UTC ISO when persisting
+function toUtcIso(d: Date | null): string | null {
+  return d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), 0, 0)).toISOString() : null
+}
+
 // DB types (subset) aligned with simple schema
 interface DbContactBatch {
   id: string
@@ -297,7 +334,7 @@ export default function SchedulingPage() {
           description,
           status: "scheduled", // mark as scheduled if startAt provided, else draft
           target_contacts: totalContacts,
-          start_at: campaignForm.startAt ? new Date(campaignForm.startAt).toISOString() : null,
+          start_at: toUtcIso(campaignForm.startAt),
           concurrency: 10,
         })
         .select("*")
@@ -572,7 +609,7 @@ export default function SchedulingPage() {
           description,
           status: "scheduled",
           target_contacts: 1,
-          start_at: singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString() : null,
+          start_at: toUtcIso(singleCampaignForm.startAt),
           concurrency: 10,
         })
         .select("*")
@@ -679,34 +716,25 @@ export default function SchedulingPage() {
                       <Input
                         id="sc-start-date"
                         type="date"
-                        value={singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString().slice(0,10) : ""}
+                        value={formatDateLocal(singleCampaignForm.startAt)}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const date = e.target.value
-                          setSingleCampaignForm((prev) => {
-                            const current = prev.startAt ? new Date(prev.startAt) : new Date()
-                            if (!date) return { ...prev, startAt: null }
-                            const [y,m,d] = date.split("-").map(Number)
-                            const next = new Date(current)
-                            next.setFullYear(y)
-                            next.setMonth((m||1)-1)
-                            next.setDate(d||1)
-                            return { ...prev, startAt: next }
-                          })
+                          setSingleCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: date ? mergeLocalDate(prev.startAt, date) : null,
+                          }))
                         }}
                       />
                       <Input
                         type="time"
                         step={60}
-                        value={singleCampaignForm.startAt ? new Date(singleCampaignForm.startAt).toISOString().slice(11,16) : ""}
+                        value={formatTimeLocal(singleCampaignForm.startAt)}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const time = e.target.value
-                          setSingleCampaignForm((prev) => {
-                            if (!time) return { ...prev, startAt: prev.startAt }
-                            const [hh,mm] = time.split(":").map(Number)
-                            const base = prev.startAt ? new Date(prev.startAt) : new Date()
-                            base.setHours(hh||0, mm||0, 0, 0)
-                            return { ...prev, startAt: base }
-                          })
+                          setSingleCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: mergeLocalTime(prev.startAt, time),
+                          }))
                         }}
                       />
                     </div>
@@ -759,34 +787,25 @@ export default function SchedulingPage() {
                       <Input
                         id="start-at"
                         type="date"
-                        value={campaignForm.startAt ? new Date(campaignForm.startAt).toISOString().slice(0,10) : ""}
+                        value={formatDateLocal(campaignForm.startAt)}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const date = e.target.value
-                          setCampaignForm((prev) => {
-                            const current = prev.startAt ? new Date(prev.startAt) : new Date()
-                            if (!date) return { ...prev, startAt: null }
-                            const [y,m,d] = date.split("-").map(Number)
-                            const next = new Date(current)
-                            next.setFullYear(y)
-                            next.setMonth((m||1)-1)
-                            next.setDate(d||1)
-                            return { ...prev, startAt: next }
-                          })
+                          setCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: date ? mergeLocalDate(prev.startAt, date) : null,
+                          }))
                         }}
                       />
                       <Input
                         type="time"
                         step={60}
-                        value={campaignForm.startAt ? new Date(campaignForm.startAt).toISOString().slice(11,16) : ""}
+                        value={formatTimeLocal(campaignForm.startAt)}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const time = e.target.value
-                          setCampaignForm((prev) => {
-                            if (!time) return { ...prev, startAt: prev.startAt }
-                            const [hh,mm] = time.split(":").map(Number)
-                            const base = prev.startAt ? new Date(prev.startAt) : new Date()
-                            base.setHours(hh||0, mm||0, 0, 0)
-                            return { ...prev, startAt: base }
-                          })
+                          setCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: mergeLocalTime(prev.startAt, time),
+                          }))
                         }}
                       />
                     </div>

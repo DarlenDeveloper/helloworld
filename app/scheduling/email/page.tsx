@@ -16,6 +16,34 @@ import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 import { BetaCountdownModal } from "@/components/beta-countdown"
 
+// Local date/time helpers (keep consistent with call scheduling page)
+function pad2(n: number) { return n.toString().padStart(2, "0") }
+function formatDateLocal(d: Date | null): string {
+  if (!d) return ""
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`
+}
+function formatTimeLocal(d: Date | null): string {
+  if (!d) return ""
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+function mergeLocalDate(base: Date | null, dateStr: string): Date | null {
+  if (!dateStr) return null
+  const [y,m,d] = dateStr.split("-").map(Number)
+  const b = base ? new Date(base) : new Date()
+  b.setFullYear(y); b.setMonth((m||1)-1); b.setDate(d||1)
+  return b
+}
+function mergeLocalTime(base: Date | null, timeStr: string): Date | null {
+  if (!timeStr) return base
+  const [hh,mm] = timeStr.split(":").map(Number)
+  const b = base ? new Date(base) : new Date()
+  b.setHours(hh||0, mm||0, 0, 0)
+  return b
+}
+function toUtcIso(d: Date | null): string | null {
+  return d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), 0, 0)).toISOString() : null
+}
+
 // DB types (subset) aligned with simple schema
 interface DbContactBatch {
   id: string
@@ -79,6 +107,7 @@ export default function EmailSchedulingPage() {
     body: "",
     sendIntervalSeconds: 1,
     selectedBatches: [] as string[],
+    startAt: null as Date | null,
   })
 
   // start campaign state
@@ -286,6 +315,7 @@ export default function EmailSchedulingPage() {
           description,
           status: "draft",
           target_contacts: totalContacts,
+          start_at: toUtcIso(campaignForm.startAt),
         })
         .select("*")
         .single()
@@ -305,7 +335,7 @@ export default function EmailSchedulingPage() {
       }
 
       setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-      setCampaignForm({ name: "", subject: "", body: "", sendIntervalSeconds: 1, selectedBatches: [] })
+      setCampaignForm({ name: "", subject: "", body: "", sendIntervalSeconds: 1, selectedBatches: [], startAt: null })
       setIsCreateCampaignOpen(false)
     } catch (err) {
       console.error("Error creating campaign:", err)
@@ -519,6 +549,38 @@ export default function EmailSchedulingPage() {
                   <div className="space-y-2">
                     <Label htmlFor="campaign-name">Campaign Name *</Label>
                     <Input id="campaign-name" placeholder="Enter campaign name" value={campaignForm.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
+                  </div>
+
+                  {/* Schedule Start (optional) */}
+                  <div className="space-y-2">
+                    <Label htmlFor="email-start-date">Schedule Start (optional)</Label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <Input
+                        id="email-start-date"
+                        type="date"
+                        value={formatDateLocal(campaignForm.startAt)}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const date = e.target.value
+                          setCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: date ? mergeLocalDate(prev.startAt, date) : null,
+                          }))
+                        }}
+                      />
+                      <Input
+                        type="time"
+                        step={60}
+                        value={formatTimeLocal(campaignForm.startAt)}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const time = e.target.value
+                          setCampaignForm((prev) => ({
+                            ...prev,
+                            startAt: mergeLocalTime(prev.startAt, time),
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="text-xs text-gray-500">If blank, you can start the campaign manually later.</div>
                   </div>
 
                   {/* Contact Batches */}

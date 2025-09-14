@@ -24,7 +24,11 @@ export async function POST() {
   const env: any = (globalThis as any).process?.env || {}
   const globalWebhook = (env.CAMPAIGN_WEBHOOK_URL as string | undefined)
   if (!globalWebhook) {
-    return NextResponse.json({ success: true, message: "CAMPAIGN_WEBHOOK_URL not set; dispatcher skipped." })
+    return NextResponse.json({
+      success: false,
+      error: "CAMPAIGN_WEBHOOK_URL not set; dispatcher skipped.",
+      hint: "Set CAMPAIGN_WEBHOOK_URL in your environment for /api/campaign-dispatch to send webhooks.",
+    }, { status: 200 })
   }
 
   // Fetch active campaigns (ordered by created_at for fairness if you want to extend)
@@ -33,11 +37,23 @@ export async function POST() {
     .select("id")
     .eq("status", "active")
 
+
   if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 })
 
   // Seed queues idempotently and reconcile "sent" -> "done" based on call_history
+  const diagnostics: Array<{ campaign_id: string, seeded: number | null, reconciled: number }> = []
   for (const campaign of campaigns || []) {
-    await supabase.rpc("populate_campaign_contacts", { p_campaign: campaign.id })
+    let seeded: number | null = null
+    try {
+      const { data: seededCount, error: seedErr } = await supabase.rpc("populate_campaign_contacts", { p_campaign: campaign.id })
+      if (seedErr) {
+        console.error("[dispatch] populate_campaign_contacts failed for", campaign.id, seedErr.message)
+      } else {
+        seeded = Number(seededCount ?? 0)
+      }
+    } catch (e: any) {
+      console.error("[dispatch] populate_campaign_contacts exception for", campaign.id, String(e))
+    }
 
     // Mark previously sent contacts as done if a call exists
     const { data: sentRows } = await supabase
@@ -47,6 +63,7 @@ export async function POST() {
       .eq("status", "sent")
       .limit(2000)
 
+    let reconciledCount = 0
     for (const row of sentRows || []) {
       const { data: ch } = await supabase
         .from("call_history")
@@ -60,19 +77,23 @@ export async function POST() {
           .from("campaign_contacts")
           .update({ status: "done", processed_at: new Date().toISOString() })
           .eq("id", row.id)
+        reconciledCount += 1
       }
     }
+    diagnostics.push({ campaign_id: campaign.id, seeded, reconciled: reconciledCount })
   }
 
   const sessionStart = Date.now()
   const sessionEnd = sessionStart + SESSION_MS
   let dispatched = 0
+  const perCampaignStats: Record<string, { sent: number, failed: number, invalid: number }> = {}
 
   // Loop within a 6-minute "session" and send up to 10 contacts total across all active campaigns
   while (Date.now() < sessionEnd && dispatched < CONTACTS_PER_SESSION) {
     let progressed = false
 
     for (const campaign of campaigns || []) {
+      if (!perCampaignStats[campaign.id]) perCampaignStats[campaign.id] = { sent: 0, failed: 0, invalid: 0 }
       if (Date.now() >= sessionEnd || dispatched >= CONTACTS_PER_SESSION) break
 
       // Pick next single pending contact for this campaign
@@ -109,6 +130,7 @@ export async function POST() {
             processed_at: new Date().toISOString(),
           })
           .eq("id", row.id)
+        perCampaignStats[campaign.id].invalid += 1
         progressed = true
         // Do not count towards the 10 since nothing was sent
         continue
@@ -142,12 +164,14 @@ export async function POST() {
               processed_at: new Date().toISOString(),
             })
             .eq("id", row.id)
+          perCampaignStats[campaign.id].failed += 1
         } else {
           await supabase
             .from("campaign_contacts")
             .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
             .eq("id", row.id)
 
+          perCampaignStats[campaign.id].sent += 1
           dispatched += 1
           // Wait 3 seconds between sends to give the webhook breathing room
           await sleep(GAP_MS)
@@ -186,5 +210,9 @@ export async function POST() {
       max: CONTACTS_PER_SESSION,
       duration_ms: Date.now() - sessionStart,
     },
+    diagnostics: {
+      campaigns: diagnostics,
+      per_campaign: perCampaignStats,
+    }
   })
 }

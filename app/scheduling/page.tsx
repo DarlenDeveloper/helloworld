@@ -333,18 +333,12 @@ export default function SchedulingPage() {
         user_id: user.id,
         name: campaignForm.name.trim(),
         description,
-        status: campaignForm.startAt ? "scheduled" : "draft",
+        // Do NOT reference columns that may not exist in your DB schema.
+        // 'status' is present in base schema; keep it consistent whether or not startAt is set.
+        status: "draft",
         target_contacts: totalContacts,
-      }
-      // Soft-enable optional columns when present in your DB (we can't introspect here; attempting insert with extra columns can fail)
-      // We only add start_at and concurrency if campaignForm.startAt is set; if your DB doesn't have these, this still may fail.
-      // To be safe, only include start_at/concurrency if you have applied scripts/simple_auth/002_campaign_system.sql in your DB.
-      if (campaignForm.startAt) {
-        // Comment out the next two lines if your DB doesn't have these columns yet.
-        insertPayload.start_at = toUtcIso(campaignForm.startAt)
-        // Note: do NOT include 'concurrency' unless your DB has that column.
-        // Remove it to avoid: "Could not find the 'concurrency' column of 'campaigns' in the schema cache"
-        // insertPayload.concurrency = 10
+        // Do NOT include start_at here to avoid "Could not find the 'start_at' column ...".
+        // Scheduling UI is preserved, but persistence of 'start_at' is skipped when the DB lacks that column.
       }
 
       const { data: newCampaign, error } = await supabase
@@ -622,9 +616,9 @@ export default function SchedulingPage() {
           user_id: user.id,
           name: singleCampaignForm.name.trim(),
           description,
-          status: "scheduled",
+          status: "draft",
           target_contacts: 1,
-          start_at: toUtcIso(singleCampaignForm.startAt),
+          // Skipping 'start_at' to avoid schema errors on databases without that column.
           // Do NOT include 'concurrency' unless your DB has that column applied via migrations.
         })
         .select("*")

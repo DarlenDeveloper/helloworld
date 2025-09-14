@@ -18,29 +18,55 @@ function parseField(desc: string | null | undefined, key: string): string | null
   return m ? m[1].trim() : null
 }
 
+/**
+ * Email dispatcher (DB-persisted attempts; no webhooks)
+ * - Accept any email string as-is (no validation/required check)
+ * - Create a dispatch session for channel 'email'
+ * - For each pending contact, write a dispatch_events row (action='sent') and update queue to 'sent'
+ * - Errors are recorded as action='failed' but do not throw
+ */
 export async function POST() {
   const supabase = await createClient()
-  const fallbackWebhook = process.env.EMAIL_WEBHOOK_URL || process.env.CAMPAIGN_WEBHOOK_URL
+
+  // Resolve owner for RLS
+  let owner_id: string | null = null
+  try {
+    const { data } = await (supabase as any).auth.getUser?.()
+    owner_id = data?.user?.id || null
+  } catch {}
+
+  if (!owner_id) {
+    return NextResponse.json({ success: false, error: "No authenticated user for RLS" }, { status: 401 })
+  }
 
   // Active Email campaigns
   const { data: campaigns, error: campErr } = await supabase
     .from("email_campaigns")
-    .select("id, status, description, webhook_url")
+    .select("id, status, description")
     .eq("status", "active")
     .order("created_at", { ascending: true })
 
-  if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 })
+  if (campErr) return NextResponse.json({ success: false, error: campErr.message }, { status: 500 })
 
-  let totalProcessed = 0
-  const stats: Array<{ campaign_id: string, seeded: number | null, sent: number, failed: number, skipped_no_email: number }> = []
+  // Create session
+  const config = { note: "email-session" }
+  const { data: sessIns, error: sessErr } = await supabase
+    .from("dispatch_sessions")
+    .insert([{ owner_id, channel: "email", config }])
+    .select("id")
+    .single()
+  if (sessErr) return NextResponse.json({ success: false, error: sessErr.message }, { status: 500 })
+  const sessionId = (sessIns as any)?.id as string
+
+  let totalAttempted = 0
+  let totalRecorded = 0
+  let totalErrored = 0
+  const stats: Array<{ campaign_id: string, attempted: number, recorded: number, errored: number }> = []
+
   for (const camp of campaigns || []) {
     const channel = parseChannel(camp.description)
     if (channel !== "email") continue
 
-    // We skip seeding RPC to avoid \"no destination for result\" errors; rely on start step for seeding.
-    let seeded: number | null = null
-
-    // Pick next up to 5 pending contacts for this campaign
     const { data: pendRows, error: pendErr } = await supabase
       .from("email_campaign_contacts")
       .select("id, contact_id")
@@ -49,105 +75,103 @@ export async function POST() {
       .order("created_at", { ascending: true })
       .limit(5)
 
-    if (pendErr) {
-      continue
-    }
-
+    if (pendErr) continue
     if (!pendRows || pendRows.length === 0) {
-      stats.push({ campaign_id: camp.id, seeded, sent: 0, failed: 0, skipped_no_email: 0 })
+      stats.push({ campaign_id: camp.id, attempted: 0, recorded: 0, errored: 0 })
       continue
     }
 
-    // Fetch contacts in bulk
     const contactIds = pendRows.map((r: { contact_id: string }) => r.contact_id)
     const { data: contacts } = await supabase
       .from("contacts")
-      .select("id, name, email, phone, notes, opted_out")
+      .select("id, name, email, phone, notes")
       .in("id", contactIds)
 
-    type ContactRow = { id: string; name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; opted_out?: boolean | null }
+    type ContactRow = { id: string; name?: string | null; email?: string | null; phone?: string | null; notes?: string | null }
     const byId = new Map<string, ContactRow>()
     ;((contacts as ContactRow[] | null) || []).forEach((c: ContactRow) => byId.set(c.id, c))
 
     const subject = parseField(camp.description, "Subject") || ""
     const body = parseField(camp.description, "Body") || ""
-    const campaignWebhook = (camp.webhook_url && camp.webhook_url.trim().length > 0) ? camp.webhook_url.trim() : (fallbackWebhook || null)
-    let sentCount = 0
-    let failedCount = 0
-    let skippedNoEmail = 0
-
-    // pacing
-    const intervalSecondsStr = parseField(camp.description, "IntervalSeconds") || parseField(camp.description, "RateLimitSeconds")
-    const perSecStr = parseField(camp.description, "RateLimitPerSec")
-    let intervalMs = 1000
-    if (intervalSecondsStr) {
-      const s = Number(intervalSecondsStr)
-      if (!Number.isNaN(s) && s > 0) intervalMs = Math.round(s * 1000)
-    } else if (perSecStr) {
-      const n = Number(perSecStr)
-      if (!Number.isNaN(n) && n > 0) intervalMs = Math.round((1 / n) * 1000)
-    }
+    let attempted = 0
+    let recorded = 0
+    let errored = 0
 
     for (const row of pendRows) {
+      attempted += 1
+      totalAttempted += 1
       const contact = byId.get(row.contact_id)
-      const to = (contact?.email || "").trim()
-      const optedOut = !!contact?.opted_out
+      const target = (contact?.email || "").toString().trim() // accept any email string
 
-      if (!campaignWebhook || !to || optedOut) {
-        const reason = !campaignWebhook ? "No webhook configured" : optedOut ? "Opted out" : "Missing email"
-        await supabase
-          .from("email_campaign_contacts")
-          .update({ status: "failed", attempts: 1, last_error: reason })
-          .eq("id", row.id)
-        skippedNoEmail += !to ? 1 : 0
-        failedCount += to ? 1 : 0
-        continue
+      const payload = {
+        channel: "email",
+        campaign_id: camp.id,
+        contact_id: row.contact_id,
+        target,
+        subject,
+        body,
+        contact,
       }
 
       try {
-        const payload = {
-          channel: "email",
-          campaign_id: camp.id,
-          contact_id: row.contact_id,
-          to,
-          subject,
-          body,
-          contact,
-        }
-        const resp = await fetch(campaignWebhook, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
+        const { error: insErr } = await supabase
+          .from("dispatch_events")
+          .insert([{
+            session_id: sessionId,
+            owner_id,
+            campaign_id: camp.id,
+            contact_id: row.contact_id,
+            channel: "email",
+            action: "sent",
+            detail: payload,
+          }])
 
-        if (!resp.ok) {
-          const txt = await resp.text().catch(() => "")
-          await supabase
-            .from("email_campaign_contacts")
-            .update({ status: "failed", attempts: 1, last_error: `HTTP ${resp.status}: ${txt}`.slice(0, 1000) })
-            .eq("id", row.id)
-          failedCount += 1
+        if (insErr) {
+          errored += 1
+          totalErrored += 1
+          await supabase.from("dispatch_events").insert([{
+            session_id: sessionId,
+            owner_id,
+            campaign_id: camp.id,
+            contact_id: row.contact_id,
+            channel: "email",
+            action: "failed",
+            detail: { error: insErr.message, payload },
+          }])
         } else {
+          recorded += 1
+          totalRecorded += 1
           await supabase
             .from("email_campaign_contacts")
             .update({ status: "sent", attempts: 1, sent_at: new Date().toISOString() })
             .eq("id", row.id)
-          totalProcessed += 1
-          sentCount += 1
         }
       } catch (e: any) {
-        await supabase
-          .from("email_campaign_contacts")
-          .update({ status: "failed", attempts: 1, last_error: String(e).slice(0, 1000) })
-          .eq("id", row.id)
-        failedCount += 1
+        errored += 1
+        totalErrored += 1
+        await supabase.from("dispatch_events").insert([{
+          session_id: sessionId,
+          owner_id,
+          campaign_id: camp.id,
+          contact_id: row.contact_id,
+          channel: "email",
+          action: "failed",
+          detail: { error: String(e), payload },
+        }])
       }
 
-      await sleep(intervalMs)
+      await sleep(1000) // pacing
     }
-  
-    stats.push({ campaign_id: camp.id, seeded, sent: sentCount, failed: failedCount, skipped_no_email: skippedNoEmail })
+
+    stats.push({ campaign_id: camp.id, attempted, recorded, errored })
   }
 
-  return NextResponse.json({ success: true, processed: totalProcessed, diagnostics: stats })
+  // Close session
+  await supabase
+    .from("dispatch_sessions")
+    .update({ ended_at: new Date().toISOString(), totals: { attempted: totalAttempted, recorded: totalRecorded, errored: totalErrored } })
+    .eq("id", sessionId)
+    .eq("owner_id", owner_id)
+
+  return NextResponse.json({ success: true, session_id: sessionId, totals: { attempted: totalAttempted, recorded: totalRecorded, errored: totalErrored }, diagnostics: stats })
 }

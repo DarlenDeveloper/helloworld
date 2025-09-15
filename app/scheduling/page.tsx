@@ -5,18 +5,21 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Plus, Calendar as CalendarIcon, Edit, Trash2, Users, Play } from "lucide-react"
+import { Upload, Plus, Edit, Trash2, Users, Play } from "lucide-react"
 import { format } from "date-fns"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { createClient } from "@/lib/supabase/client"
+import type { User } from "@supabase/supabase-js"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
-import { createClient } from "@/lib/supabase/client"
-import type { User } from "@supabase/supabase-js"
 
-// Local date/time helpers to avoid UTC shifts in inputs
+ // Looser "acceptable" phone check for red-flagging only (not enforced).
+ // Acceptable (but not enforced for dispatch): +countrycode followed by at least 9 digits (total 10+ digits).
+ const CC_PLUS_9_REGEX = /^\+\d{10,}$/
+ // How many logs to fetch per page (supports thousands via paging)
+ const LOGS_PAGE_SIZE = 200
+
+// Helpers
 function pad2(n: number) { return n.toString().padStart(2, "0") }
 function formatDateLocal(d: Date | null): string {
   if (!d) return ""
@@ -25,35 +28,18 @@ function formatDateLocal(d: Date | null): string {
   const da = pad2(d.getDate())
   return `${yr}-${mo}-${da}`
 }
-function formatTimeLocal(d: Date | null): string {
-  if (!d) return ""
-  const hh = pad2(d.getHours())
-  const mm = pad2(d.getMinutes())
-  return `${hh}:${mm}`
-}
-// Convert a pair of local date string (YYYY-MM-DD) and time string (HH:mm) with an existing base Date to a new Date object in local time
-function mergeLocalDate(base: Date | null, dateStr: string): Date | null {
-  if (!dateStr) return null
-  const [y, m, d] = dateStr.split("-").map(Number)
-  const b = base ? new Date(base) : new Date()
-  b.setFullYear(y)
-  b.setMonth((m || 1) - 1)
-  b.setDate(d || 1)
-  return b
-}
-function mergeLocalTime(base: Date | null, timeStr: string): Date | null {
-  if (!timeStr) return base
-  const [hh, mm] = timeStr.split(":").map(Number)
-  const b = base ? new Date(base) : new Date()
-  b.setHours(hh || 0, mm || 0, 0, 0)
-  return b
-}
-// Normalize to UTC ISO when persisting
-function toUtcIso(d: Date | null): string | null {
-  return d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), 0, 0)).toISOString() : null
-}
 
-// DB types (subset) aligned with simple schema
+// Basic loose normalization: strip separators, 00->+, add + if only digits and length >= 10.
+// We DO NOT enforce validity here; red flags are purely visual and nothing is suppressed.
+function normalizeLoosePhone(raw: string): string {
+  let s = (raw || "").trim()
+  s = s.replace(/[\s\-().]/g, "")
+  if (s.startsWith("00")) s = "+" + s.slice(2)
+  if (!s.startsWith("+") && /^\d{10,}$/.test(s)) s = "+" + s
+  return s
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 interface DbContactBatch {
   id: string
   user_id: string
@@ -73,17 +59,20 @@ interface DbContact {
   notes: string | null
 }
 
-interface DbCampaign {
+type CallSession = {
   id: string
-  user_id: string
-  name: string
-  description: string | null
-  status: "draft" | "active" | "paused" | "completed"
-  target_contacts: number | null
-  completed_calls: number | null
-  success_rate: number | null
+  status: "running" | "completed" | "failed"
+  totals: { enqueued?: number; skipped?: number; errored?: number } | null
   created_at: string
-  updated_at: string
+}
+
+type CallLog = {
+  id: string
+  session_id: string
+  contact_id: string | null
+  action: "enqueued" | "skipped" | "failed"
+  detail: any
+  created_at: string
 }
 
 export default function SchedulingPage() {
@@ -96,48 +85,20 @@ export default function SchedulingPage() {
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null)
   const [selectedBatchContacts, setSelectedBatchContacts] = useState<DbContact[]>([])
 
-  const [campaigns, setCampaigns] = useState<DbCampaign[]>([])
-  const [isCreateCampaignOpen, setIsCreateCampaignOpen] = useState(false)
-  const [isCreatingCampaign, setIsCreatingCampaign] = useState(false)
-
-  const [campaignForm, setCampaignForm] = useState({
-    name: "",
-    concurrentCalls: 10, // UI picker below controls this value
-    prompt: "",
-    selectedBatches: [] as string[],
-    startAt: null as Date | null, // scheduled start datetime
-  })
-
-  // start campaign state
-  const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null)
-  const [starting, setStarting] = useState(false)
-
+  // CSV import
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
 
-  // Single Caller Campaign dialog state
-  const [isSingleCallerOpen, setIsSingleCallerOpen] = useState(false)
-  const [singleContact, setSingleContact] = useState<{ name: string; phone: string; email: string; notes: string }>(
-    { name: "", phone: "", email: "", notes: "" }
-  )
-  const [singleCampaignForm, setSingleCampaignForm] = useState<{
-    name: string
-    prompt: string
-    startAt: Date | null
-  }>({
-    name: "",
-    prompt: "",
-    startAt: null,
-  })
-  const [creatingSingle, setCreatingSingle] = useState(false)
-
-  const phoneValidation = useMemo(() => {
-    const raw = singleContact.phone.trim()
-    if (!raw) return { valid: false, normalized: "", touched: false }
-    const normalized = normalizePhone(raw)
-    return { valid: isValidPhone(normalized), normalized, touched: true }
-  }, [singleContact.phone])
+  // Start Call Batch (transport sessions)
+  const [starting, setStarting] = useState(false)
+  const [lastSession, setLastSession] = useState<CallSession | null>(null)
+  const [recentLogs, setRecentLogs] = useState<CallLog[]>([])
+  const [callReady, setCallReady] = useState<boolean | null>(null)
+  // Logs pagination state
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsHasMore, setLogsHasMore] = useState(false)
+  const [logsCursor, setLogsCursor] = useState<string | null>(null) // created_at of last row in current list
 
   // Derived map for quick lookups
   const batchMap = useMemo(() => {
@@ -156,7 +117,7 @@ export default function SchedulingPage() {
           return
         }
         setUser(user)
-        await Promise.all([fetchBatches(user.id), fetchCampaigns(user.id)])
+        await fetchBatches(user.id)
       } catch (e) {
         console.error("Failed to initialize scheduling page:", e)
       } finally {
@@ -164,7 +125,20 @@ export default function SchedulingPage() {
       }
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router])
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/scheduling/call/dispatch", { method: "GET" })
+        const j = await res.json().catch(() => ({}))
+        setCallReady(res.ok ? Boolean(j?.ready) : false)
+      } catch {
+        setCallReady(false)
+      }
+    })()
+  }, [])
 
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
@@ -181,7 +155,6 @@ export default function SchedulingPage() {
   }
 
   const fetchBatchContacts = async (batchId: string) => {
-    // Read snapshot contact data directly from batch_contacts
     const { data, error } = await supabase
       .from("batch_contacts")
       .select("contact_id, name, email, phone, notes")
@@ -205,19 +178,128 @@ export default function SchedulingPage() {
     setSelectedBatchContacts(mapped)
   }
 
-  const fetchCampaigns = async (userId: string) => {
-    // include start_at if present
-    const { data, error } = await supabase
-      .from("campaigns")
-      .select("*, start_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
+  const onClickImportCSV = () => fileInputRef.current?.click()
 
-    if (error) {
-      console.error("Error fetching campaigns:", error)
-      return
+  type ParsedPhones = { rows: { phone: string; notes: string }[] }
+
+  // Accept everything; sanitize lightly. No skipping, no validation here.
+  const parseCSV = (text: string): ParsedPhones => {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (lines.length === 0) return { rows: [] }
+
+    const hasHeader = /(^|,)\s*(contact|phone|number)\s*(,|$)/i.test(lines[0])
+    const entries = hasHeader ? lines.slice(1) : lines
+
+    const rows: { phone: string; notes: string }[] = []
+    for (const line of entries) {
+      const parts = line.split(",")
+      const rawPhone = (parts[0] || "").trim()
+      if (!rawPhone) continue
+      const notes = (parts[1] || "").trim()
+      rows.push({ phone: normalizeLoosePhone(rawPhone), notes })
     }
-    setCampaigns(data as DbCampaign[] || [])
+    return { rows }
+  }
+
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const res: T[][] = []
+    for (let i = 0; i < arr.length; i += size) res.push(arr.slice(i, i + size))
+    return res
+  }
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user || !selectedBatch) return
+    const file = e.target.files?.[0]
+    e.target.value = "" // reset input value for future imports
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const parsed = parseCSV(text)
+      const uniqueByPhone = Array.from(new Map(parsed.rows.map((r) => [r.phone, r])).values())
+      if (uniqueByPhone.length === 0) {
+        alert("No contacts found in CSV.")
+        return
+      }
+
+      setImporting(true)
+      setImportProgress({ processed: 0, total: uniqueByPhone.length })
+
+      const CHUNK_SIZE = 500
+      const chunks = chunk(uniqueByPhone, CHUNK_SIZE)
+      let totalInserted = 0
+
+      let allowedRemaining = Math.max(0, 1000 - (batchMap.get(selectedBatch)?.contact_count || 0))
+      if (allowedRemaining === 0) {
+        alert("This batch already has 1000 contacts.")
+        return
+      }
+
+      for (let i = 0; i < chunks.length && allowedRemaining > 0; i++) {
+        const c = chunks[i].slice(0, allowedRemaining)
+        // Insert contacts (no phone enforcement)
+        const contactRows = c.map((r) => ({
+          user_id: user.id,
+          name: null,
+          email: null,
+          phone: r.phone,
+          notes: r.notes || null,
+        }))
+
+        const { data: inserted, error: insErr } = await supabase
+          .from("contacts")
+          .insert(contactRows)
+          .select("id")
+
+        if (insErr) {
+          console.error("Failed inserting contacts chunk:", insErr)
+          alert("Failed to import some contacts. See console for details.")
+          break
+        }
+
+        const linkRows = (inserted || []).map((row: any, idx: number) => ({
+          batch_id: selectedBatch,
+          contact_id: row.id,
+          name: null,
+          email: null,
+          phone: c[idx]?.phone || null,
+          notes: c[idx]?.notes || null,
+        }))
+
+        if (linkRows.length > 0) {
+          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
+          if (linkErr) {
+            console.error("Failed linking batch contacts:", linkErr)
+            alert("Failed to link some contacts to batch. See console for details.")
+            break
+          }
+        }
+
+        totalInserted += contactRows.length
+        setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
+        allowedRemaining -= contactRows.length
+      }
+
+      // Update batch contact_count in DB and in memory
+      if (totalInserted > 0) {
+        await supabase
+          .from("contact_batches")
+          .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
+          .eq("id", selectedBatch)
+
+        // Refresh batch in memory
+        setContactBatches((prev) =>
+          prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + totalInserted } : b))
+        )
+        await fetchBatchContacts(selectedBatch)
+      }
+    } catch (err) {
+      console.error("Failed to import CSV:", err)
+      alert("Failed to import CSV.")
+    } finally {
+      setImporting(false)
+      setImportProgress(null)
+    }
   }
 
   const handleCreateBatch = async () => {
@@ -259,6 +341,8 @@ export default function SchedulingPage() {
     if (selectedBatch === batchId) {
       setSelectedBatch(null)
       setSelectedBatchContacts([])
+      setLastSession(null)
+      setRecentLogs([])
     }
   }
 
@@ -281,366 +365,163 @@ export default function SchedulingPage() {
     setContactBatches((prev) => prev.map((b) => (b.id === batchId ? (data as DbContactBatch) : b)))
   }
 
-  const handleBatchSelection = (batchId: string, checked: boolean) => {
-    setCampaignForm((prev) => ({
-      ...prev,
-      selectedBatches: checked
-        ? [...prev.selectedBatches, batchId]
-        : prev.selectedBatches.filter((id) => id !== batchId),
-    }))
+  // Sessions and logs (24h transport)
+  const fetchLatestSessionForBatch = async (batchId: string) => {
+    const { data, error } = await supabase
+      .from("call_scheduling_sessions")
+      .select("id, status, totals, created_at")
+      .eq("batch_id", batchId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+
+    if (error) {
+      console.error("Failed to fetch sessions:", error)
+      return null
+    }
+    const sess = (data || [])[0] as CallSession | undefined
+    setLastSession(sess || null)
+    return sess || null
   }
 
-  const handleCreateCampaign = async () => {
-    if (!user) return
-
-    if (!campaignForm.name.trim()) {
-      alert("Campaign name is required")
-      return
-    }
-
-    if (campaignForm.selectedBatches.length === 0) {
-      alert("Please select at least one contact batch")
-      return
-    }
-
-    if (!campaignForm.prompt.trim()) {
-      alert("Campaign prompt is required")
-      return
-    }
-
-    setIsCreatingCampaign(true)
-
+  // Reset logs for a session and load the first page (LOGS_PAGE_SIZE)
+  const fetchLogsResetForSession = async (sessionId: string) => {
+    setLogsLoading(true)
     try {
-      // Count only valid phone numbers across selected batches (exclude invalid)
-      const batchIds = campaignForm.selectedBatches
-      let totalContacts = 0
-      for (const id of batchIds) {
-        const { count, error: cntErr } = await supabase
-          .from("batch_contacts")
-          .select("id", { count: "exact", head: true })
-          .eq("batch_id", id)
-          .not("phone", "is", null)
-          .filter("phone", "regex", "^(?:\\+256\\d{9}|\\+[1-9]\\d{7,14})$")
-        if (!cntErr) totalContacts += count || 0
-      }
+      const { data, error } = await supabase
+        .from("call_scheduling_logs")
+        .select("id, session_id, contact_id, action, detail, created_at")
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: false })
+        .limit(LOGS_PAGE_SIZE)
 
-      // Persist ONLY columns that exist on campaigns table schema.
-      // Everything else (schedule, concurrency) is runtime-only and handled outside the DB row.
-      const insertPayload: any = {
-        user_id: user.id,
-        name: campaignForm.name.trim(),
-        // keep rich description in DB for operator context
-        description: `Prompt: ${campaignForm.prompt}\nConcurrent Lines: ${campaignForm.concurrentCalls}\n${
-          campaignForm.startAt ? `Scheduled(Local): ${formatDateLocal(campaignForm.startAt)} ${formatTimeLocal(campaignForm.startAt)}` : "No Schedule"
-        }`,
-        status: "draft",
-        target_contacts: totalContacts,
-      }
-
-      const { data: newCampaign, error } = await supabase
-        .from("campaigns")
-        .insert(insertPayload)
-        .select("*")
-        .single()
-
-      if (error || !newCampaign) {
-        console.error("Failed to create campaign:", error)
-        // Surface the exact backend error for fast diagnosis
-        alert(error?.message ? `Failed to create campaign: ${error.message}` : "Failed to create campaign")
+      if (error) {
+        console.error("Failed to fetch logs (reset):", error)
+        setRecentLogs([])
+        setLogsHasMore(false)
+        setLogsCursor(null)
         return
       }
-
-      if (campaignForm.selectedBatches.length > 0) {
-        const rows = campaignForm.selectedBatches.map((batchId) => ({ campaign_id: newCampaign.id, batch_id: batchId }))
-        const { error: linkErr } = await supabase.from("campaign_batches").insert(rows)
-        if (linkErr) {
-          console.error("Failed to link campaign batches:", linkErr)
-          alert(linkErr.message ? `Campaign created but failed to link batches: ${linkErr.message}` : "Campaign created but failed to link batches")
-        }
-      }
-
-      setCampaigns((prev) => [newCampaign as DbCampaign, ...prev])
-      setCampaignForm({ name: "", concurrentCalls: 10, prompt: "", selectedBatches: [], startAt: null })
-      setIsCreateCampaignOpen(false)
-    } catch (err: any) {
-      console.error("Error creating campaign:", err)
-      const message = typeof err?.message === "string" ? err.message : String(err)
-      alert(`Failed to create campaign. ${message}`)
+      const rows = (data || []) as CallLog[]
+      setRecentLogs(rows)
+      const last = rows[rows.length - 1]
+      setLogsCursor(last ? last.created_at : null)
+      setLogsHasMore(rows.length === LOGS_PAGE_SIZE)
     } finally {
-      setIsCreatingCampaign(false)
+      setLogsLoading(false)
     }
   }
 
-  const startCampaign = async (campaignId: string) => {
-    setStartingCampaignId(campaignId)
+  // Load next page using a descending created_at cursor
+  const fetchLogsMoreForSession = async (sessionId: string) => {
+    if (!logsHasMore || logsLoading) return
+    setLogsLoading(true)
+    try {
+      const query = supabase
+        .from("call_scheduling_logs")
+        .select("id, session_id, contact_id, action, detail, created_at")
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: false })
+        .limit(LOGS_PAGE_SIZE)
+      if (logsCursor) {
+        ;(query as any).lt("created_at", logsCursor)
+      }
+      const { data, error } = await query
+      if (error) {
+        console.error("Failed to fetch logs (more):", error)
+        setLogsHasMore(false)
+        return
+      }
+      const rows = (data || []) as CallLog[]
+      setRecentLogs((prev) => [...prev, ...rows])
+      const last = rows[rows.length - 1]
+      setLogsCursor(last ? last.created_at : null)
+      setLogsHasMore(rows.length === LOGS_PAGE_SIZE)
+    } finally {
+      setLogsLoading(false)
+    }
+  }
+
+  const refreshPanel = async () => {
+    if (!selectedBatch) return
+    const sess = await fetchLatestSessionForBatch(selectedBatch)
+    if (sess) await fetchLogsResetForSession(sess.id)
+  }
+
+  const onStartCallBatch = async () => {
+    if (!selectedBatch) {
+      alert("Select a batch first")
+      return
+    }
     setStarting(true)
     try {
-      const res = await fetch(`/api/campaigns/${campaignId}/start`, {
+      const res = await fetch("/api/scheduling/call/dispatch", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_id: selectedBatch }),
       })
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || `Failed to start campaign (${res.status})`)
-      }
-      if (user) await fetchCampaigns(user.id)
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(j?.error || `Failed to start call batch (${res.status})`)
+
+      // Refresh session/logs panel after a run
+      await refreshPanel()
+      alert(`Call batch session completed. Enqueued=${j?.totals?.enqueued ?? 0}, Failed=${j?.totals?.errored ?? 0}`)
     } catch (e: any) {
-      alert(e.message || "Failed to start campaign")
+      alert(e?.message || "Failed to start call batch")
     } finally {
       setStarting(false)
-      setStartingCampaignId(null)
+    }
+  }
+
+  // Start sessions repeatedly (10 contacts per session) until batch is exhausted.
+  // Disabled when callReady === false to avoid duplicate sends in fallback mode.
+  const onStartFullBatch = async () => {
+    if (!selectedBatch) {
+      alert("Select a batch first")
+      return
+    }
+    if (callReady === false) {
+      alert("Call scheduling tables are not ready. Run scripts/simple_auth/015_call_scheduling.sql or use single-session Start Call Batch.")
+      return
+    }
+    setStarting(true)
+    try {
+      let totalEnqueued = 0
+      let totalErrored = 0
+      let cycles = 0
+      const estTotal = batchMap.get(selectedBatch)?.contact_count ?? 0
+      const maxSessions = Math.max(1, Math.ceil(estTotal / 10) + 5) // 10 per session + small buffer
+      while (cycles < maxSessions) {
+        const res = await fetch("/api/scheduling/call/dispatch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: selectedBatch }),
+        })
+        const j = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(j?.error || `Failed to run call batch (${res.status})`)
+        const enq = Number(j?.totals?.enqueued ?? 0)
+        const err = Number(j?.totals?.errored ?? 0)
+        totalEnqueued += enq
+        totalErrored += err
+        cycles += 1
+        await refreshPanel()
+        if (enq === 0) break
+        await sleep(1000)
+      }
+      alert(`Full batch scheduling completed. Total enqueued=${totalEnqueued}, Total failed=${totalErrored}`)
+    } catch (e: any) {
+      alert(e?.message || "Failed to start full batch")
+    } finally {
+      setStarting(false)
     }
   }
 
   useEffect(() => {
     if (selectedBatch) {
       fetchBatchContacts(selectedBatch)
+      refreshPanel()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBatch])
-
-  // CSV import support
-  const onClickImportCSV = () => fileInputRef.current?.click()
-
-  const normalizePhone = (raw: string) => {
-    let s = (raw || "").trim()
-    // remove common separators/spaces
-    s = s.replace(/[\s\-().]/g, "")
-    // convert leading 00 to +
-    if (s.startsWith("00")) s = "+" + s.slice(2)
-    // if no + but only digits and plausible length, prefix +
-    if (!s.startsWith("+") && /^\d{8,15}$/.test(s)) s = "+" + s
-    return s
-  }
-
-  const isValidPhone = (phone: string) => {
-    const p = (phone || "").trim()
-    // General E.164
-    if (!/^\+[1-9]\d{7,14}$/.test(p)) return false
-    // Uganda specific: +256 followed by exactly 9 digits (total length 13)
-    if (p.startsWith("+256")) return /^\+256\d{9}$/.test(p)
-    return true
-  }
-
-  type ParsedPhones = { valid: { phone: string; notes: string }[]; invalid: string[] }
-
-  const parseCSV = (text: string): ParsedPhones => {
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    if (lines.length === 0) return { valid: [], invalid: [] }
-
-    // Detect header (contact/phone/number in first column)
-    const hasHeader = /(^|,)\s*(contact|phone|number)\s*(,|$)/i.test(lines[0])
-    const rows = hasHeader ? lines.slice(1) : lines
-
-    const valid: { phone: string; notes: string }[] = []
-    const invalid: string[] = []
-    for (const line of rows) {
-      const parts = line.split(",")
-      const phoneRaw = (parts[0] || "").trim()
-      const notes = (parts[1] || "").trim()
-      if (!phoneRaw) continue
-      const phone = normalizePhone(phoneRaw)
-      if (!isValidPhone(phone)) {
-        invalid.push(phoneRaw)
-        continue
-      }
-      valid.push({ phone, notes })
-    }
-    return { valid, invalid }
-  }
-
-  const chunk = <T,>(arr: T[], size: number): T[][] => {
-    const res: T[][] = []
-    for (let i = 0; i < arr.length; i += size) res.push(arr.slice(i, i + size))
-    return res
-  }
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!user || !selectedBatch) return
-    const file = e.target.files?.[0]
-    e.target.value = "" // reset input value for future imports
-    if (!file) return
-
-    try {
-      const text = await file.text()
-      const parsed = parseCSV(text)
-      if (parsed.invalid.length > 0) {
-        const sample = parsed.invalid.slice(0, 10).join(", ")
-        alert(`Invalid phone numbers skipped (${parsed.invalid.length}): ${sample}${parsed.invalid.length > 10 ? "..." : ""}`)
-      }
-      const uniqueByPhone = Array.from(new Map(parsed.valid.map((r) => [r.phone, r])).values())
-      if (uniqueByPhone.length === 0) {
-        alert("No valid contacts found in CSV.")
-        return
-      }
-
-      setImporting(true)
-      setImportProgress({ processed: 0, total: uniqueByPhone.length })
-
-      const CHUNK_SIZE = 500
-      const chunks = chunk(uniqueByPhone, CHUNK_SIZE)
-      let totalInserted = 0
-
-      let allowedRemaining = Math.max(0, 1000 - (batchMap.get(selectedBatch)?.contact_count || 0))
-      if (allowedRemaining === 0) {
-        alert("This batch already has 1000 contacts.")
-        return
-      }
-
-      for (let i = 0; i < chunks.length && allowedRemaining > 0; i++) {
-        // Trim chunk to limit
-        const c = chunks[i].slice(0, allowedRemaining)
-        // Insert contacts
-        const contactRows = c.map((r) => ({ user_id: user.id, name: null, email: null, phone: r.phone, notes: r.notes || null }))
-        const { data: inserted, error: insErr } = await supabase
-          .from("contacts")
-          .insert(contactRows)
-          .select("id")
-
-        if (insErr) {
-          console.error("Failed inserting contacts chunk:", insErr)
-          alert("Failed to import some contacts. See console for details.")
-          break
-        }
-
-        const linkRows = (inserted || []).map((row: any, idx: number) => ({
-          batch_id: selectedBatch,
-          contact_id: row.id,
-          // snapshot from parsed chunk "c"
-          name: null,
-          email: null,
-          phone: c[idx]?.phone || null,
-          notes: c[idx]?.notes || null,
-        }))
-        if (linkRows.length > 0) {
-          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
-          if (linkErr) {
-            console.error("Failed linking batch contacts:", linkErr)
-            alert("Failed to link some contacts to batch. See console for details.")
-            break
-          }
-        }
-
-        totalInserted += contactRows.length
-        setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
-      }
-
-      // Update batch contact_count in DB and in memory
-      if (totalInserted > 0) {
-        await supabase
-          .from("contact_batches")
-          .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
-          .eq("id", selectedBatch)
-
-        // Refresh batch in memory
-        setContactBatches((prev) => prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + totalInserted } : b)))
-        await fetchBatchContacts(selectedBatch)
-      }
-    } catch (err) {
-      console.error("Failed to import CSV:", err)
-      alert("Failed to import CSV.")
-    } finally {
-      setImporting(false)
-      setImportProgress(null)
-    }
-  }
-
-  // Create a single-contact caller campaign by creating an ephemeral batch and linking it
-  const handleCreateSingleCallerCampaign = async () => {
-    if (!user) return
-    if (!phoneValidation.valid) {
-      alert("Enter a valid phone number in E.164 format (e.g., +256778825312)")
-      return
-    }
-    if (!singleCampaignForm.name.trim()) {
-      alert("Campaign name is required")
-      return
-    }
-    if (!singleCampaignForm.prompt.trim()) {
-      alert("Campaign prompt is required")
-      return
-    }
-
-    setCreatingSingle(true)
-    try {
-      const normalized = phoneValidation.normalized
-
-      // 1) Insert contact
-      const { data: contactRow, error: contactErr } = await supabase
-        .from("contacts")
-        .insert({
-          user_id: user.id,
-          name: singleContact.name.trim() || null,
-          email: singleContact.email.trim() || null,
-          phone: normalized,
-          notes: singleContact.notes.trim() || null,
-        })
-        .select("id")
-        .single()
-      if (contactErr || !contactRow) throw contactErr || new Error("Failed to insert contact")
-
-      // 2) Create ephemeral batch
-      const batchName = `Single Contact ${normalized}`
-      const { data: batchRow, error: batchErr } = await supabase
-        .from("contact_batches")
-        .insert({
-          user_id: user.id,
-          name: batchName,
-          description: "single=true",
-          contact_count: 1,
-        })
-        .select("*")
-        .single()
-      if (batchErr || !batchRow) throw batchErr || new Error("Failed to create single-contact batch")
-
-      // 3) Snapshot into batch_contacts
-      const { error: snapshotErr } = await supabase
-        .from("batch_contacts")
-        .insert({
-          batch_id: batchRow.id,
-          contact_id: contactRow.id,
-          name: singleContact.name.trim() || null,
-          email: singleContact.email.trim() || null,
-          phone: normalized,
-          notes: singleContact.notes.trim() || null,
-        })
-      if (snapshotErr) throw snapshotErr
-
-      // 4) Create campaign
-      const description = `Prompt: ${singleCampaignForm.prompt}\nConcurrent Lines: 10\nsingle=true\n${
-        singleCampaignForm.startAt ? `Scheduled(Local): ${formatDateLocal(singleCampaignForm.startAt)} ${formatTimeLocal(singleCampaignForm.startAt)}` : "No Schedule"
-      }`
-      const { data: newCampaign, error: campErr } = await supabase
-        .from("campaigns")
-        .insert({
-          user_id: user.id,
-          name: singleCampaignForm.name.trim(),
-          description,
-          status: "draft",
-          target_contacts: 1,
-        })
-        .select("*")
-        .single()
-      if (campErr || !newCampaign) throw campErr || new Error("Failed to create campaign")
-
-      // 5) Link campaign -> batch
-      const { error: linkErr } = await supabase.from("campaign_batches").insert([{ campaign_id: newCampaign.id, batch_id: batchRow.id }])
-      if (linkErr) throw linkErr
-
-      // 6) Refresh UI
-      await Promise.all([
-        fetchCampaigns(user.id),
-        fetchBatches(user.id),
-      ])
-      setIsSingleCallerOpen(false)
-      setSingleContact({ name: "", phone: "", email: "", notes: "" })
-      setSingleCampaignForm({ name: "", prompt: "", startAt: null })
-    } catch (e) {
-      console.error("Failed to create single-caller campaign:", e)
-      alert("Failed to create single-caller campaign.")
-    } finally {
-      setCreatingSingle(false)
-    }
-  }
 
   if (loading) {
     return (
@@ -659,7 +540,9 @@ export default function SchedulingPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-3xl font-bold text-black">Call Scheduling</h1>
-            <p className="text-gray-600 mt-2">Manage contact batches and create outbound call campaigns</p>
+            <p className="text-gray-600 mt-2">
+              Manage contact batches and start call scheduling sessions. Transport rows auto-expire after 24 hours.
+            </p>
           </div>
           <div className="flex gap-4">
             <Button variant="outline" className="border-gray-300 bg-transparent" onClick={handleCreateBatch}>
@@ -667,261 +550,43 @@ export default function SchedulingPage() {
               New Batch
             </Button>
             <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
-            <Button variant="outline" className="border-gray-300 bg-transparent" onClick={onClickImportCSV} disabled={!selectedBatch || importing}>
+            <Button
+              variant="outline"
+              className="border-gray-300 bg-transparent"
+              onClick={onClickImportCSV}
+              disabled={!selectedBatch || importing}
+            >
               <Upload className="h-4 w-4 mr-2" />
               {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
             </Button>
-            <Dialog open={isSingleCallerOpen} onOpenChange={setIsSingleCallerOpen}>
-              <DialogTrigger asChild>
-                <Button className="bg-indigo-500 hover:bg-indigo-600 text-white">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Single Caller Campaign
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl" aria-describedby="single-caller-desc">
-                <DialogHeader>
-                  <DialogTitle id="single-caller-title">Create Single Caller Campaign</DialogTitle>
-                </DialogHeader>
-                <div className="sr-only" id="single-caller-desc">
-                  Provide a single contact and campaign details to create a one-off caller campaign without using batches.
-                </div>
-                <div role="document" aria-labelledby="single-caller-title" className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <Label htmlFor="sc-name">Name (optional)</Label>
-                      <Input id="sc-name" value={singleContact.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, name: e.target.value }))} />
-                    </div>
-                    <div>
-                      <Label htmlFor="sc-email">Email (optional)</Label>
-                      <Input id="sc-email" type="email" value={singleContact.email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, email: e.target.value }))} />
-                    </div>
-                    <div className="md:col-span-2">
-                      <Label htmlFor="sc-phone">Phone *</Label>
-                      <Input id="sc-phone" placeholder="e.g., +256778825312" value={singleContact.phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleContact((p) => ({ ...p, phone: e.target.value }))} />
-                      {singleContact.phone && !phoneValidation.valid && <div className="text-xs text-red-600 mt-1">Invalid phone. Use E.164 format, e.g., +256778825312</div>}
-                    </div>
-                    <div className="md:col-span-2">
-                      <Label htmlFor="sc-notes">Notes (optional)</Label>
-                      <Textarea id="sc-notes" rows={3} value={singleContact.notes} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSingleContact((p) => ({ ...p, notes: e.target.value }))} />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="sc-campaign-name">Campaign Name *</Label>
-                    <Input id="sc-campaign-name" placeholder="Enter campaign name" value={singleCampaignForm.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSingleCampaignForm((prev) => ({ ...prev, name: e.target.value }))} />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="sc-prompt">Campaign Prompt *</Label>
-                    <Textarea id="sc-prompt" rows={4} placeholder="Enter the script or prompt for this campaign..." value={singleCampaignForm.prompt} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSingleCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))} />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="sc-start-date">Schedule Start</Label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <Input
-                        id="sc-start-date"
-                        type="date"
-                        value={formatDateLocal(singleCampaignForm.startAt)}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const date = e.target.value
-                          setSingleCampaignForm((prev) => ({
-                            ...prev,
-                            startAt: date ? mergeLocalDate(prev.startAt, date) : null,
-                          }))
-                        }}
-                      />
-                      <Input
-                        type="time"
-                        step={60}
-                        value={formatTimeLocal(singleCampaignForm.startAt)}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const time = e.target.value
-                          setSingleCampaignForm((prev) => ({
-                            ...prev,
-                            startAt: mergeLocalTime(prev.startAt, time),
-                          }))
-                        }}
-                      />
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      If blank, campaign remains a draft; start it manually later. These controls are runtime-only and not stored.
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end gap-3">
-                    <Button variant="outline" onClick={() => setIsSingleCallerOpen(false)} disabled={creatingSingle}>Cancel</Button>
-                    <Button onClick={handleCreateSingleCallerCampaign} disabled={creatingSingle || !phoneValidation.valid} className="bg-indigo-500 hover:bg-indigo-600">
-                      {creatingSingle ? "Creating..." : "Create Single Campaign"}
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-            <Dialog open={isCreateCampaignOpen} onOpenChange={setIsCreateCampaignOpen}>
-              <DialogTrigger asChild>
-                <Button className="bg-teal-500 hover:bg-teal-600 text-white">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create Campaign
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl" aria-describedby="create-campaign-desc">
-                <DialogHeader>
-                  <DialogTitle id="create-campaign-title">Create New Campaign</DialogTitle>
-                </DialogHeader>
-                <div className="sr-only" id="create-campaign-desc">
-                  Fill out the campaign details including name, contact batches, prompt, and schedule a start date/time.
-                </div>
-                <div role="document" aria-labelledby="create-campaign-title" className="space-y-6">
-                  {/* Campaign Name */}
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-name">Campaign Name *</Label>
-                    <Input
-                      id="campaign-name"
-                      placeholder="Enter campaign name"
-                      value={campaignForm.name}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setCampaignForm((prev) => ({ ...prev, name: e.target.value }))
-                      }
-                    />
-                  </div>
-
-                  {/* Start Date/Time (Calendar) */}
-                  <div className="space-y-2">
-                    <Label htmlFor="start-at">Schedule Start</Label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <Input
-                        id="start-at"
-                        type="date"
-                        value={formatDateLocal(campaignForm.startAt)}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const date = e.target.value
-                          setCampaignForm((prev) => ({
-                            ...prev,
-                            startAt: date ? mergeLocalDate(prev.startAt, date) : null,
-                          }))
-                        }}
-                      />
-                      <Input
-                        type="time"
-                        step={60}
-                        value={formatTimeLocal(campaignForm.startAt)}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const time = e.target.value
-                          setCampaignForm((prev) => ({
-                            ...prev,
-                            startAt: mergeLocalTime(prev.startAt, time),
-                          }))
-                        }}
-                      />
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      If blank, campaign remains scheduled with no start; you can start it manually later.
-                    </div>
-                  </div>
-
-                  {/* Concurrency Picker */}
-                  <div className="space-y-2">
-                    <Label htmlFor="concurrency">Concurrent Lines</Label>
-                    <Input
-                      id="concurrency"
-                      type="number"
-                      min={1}
-                      max={1000}
-                      step={1}
-                      value={campaignForm.concurrentCalls}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setCampaignForm((prev) => ({
-                          ...prev,
-                          concurrentCalls: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
-                        }))
-                      }
-                    />
-                    <div className="text-xs text-gray-500">How many calls to run in parallel; sent to backend as "concurrency".</div>
-                  </div>
-
-                  {/* Contact Batches */}
-                  <div className="space-y-2">
-                    <Label>Select Contact Batches *</Label>
-                    <div className="space-y-2 max-h-40 overflow-y-auto border rounded-md p-3">
-                      {contactBatches.length === 0 && (
-                        <div className="text-sm text-gray-500">No batches yet. Create one to get started.</div>
-                      )}
-                      {contactBatches.map((batch) => (
-                        <div key={batch.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`batch-${batch.id}`}
-                            checked={campaignForm.selectedBatches.includes(batch.id)}
-                            onCheckedChange={(checked: boolean | "indeterminate") =>
-                              handleBatchSelection(batch.id, Boolean(checked) && checked !== "indeterminate")
-                            }
-                          />
-                          <Label htmlFor={`batch-${batch.id}`} className="flex-1 cursor-pointer">
-                            {batch.name} ({batch.contact_count} contacts)
-                          </Label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Campaign Prompt */}
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-prompt">Campaign Prompt *</Label>
-                    <Textarea
-                      id="campaign-prompt"
-                      placeholder="Enter the script or prompt for this campaign..."
-                      rows={4}
-                      value={campaignForm.prompt}
-                      onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                        setCampaignForm((prev) => ({ ...prev, prompt: e.target.value }))
-                      }
-                    />
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex justify-end gap-3">
-                    <Button variant="outline" onClick={() => setIsCreateCampaignOpen(false)} disabled={isCreatingCampaign}>
-                      Cancel
-                    </Button>
-                    <Button onClick={handleCreateCampaign} disabled={isCreatingCampaign} className="bg-teal-500 hover:bg-teal-600">
-                      {isCreatingCampaign ? "Creating..." : "Create Campaign"}
-                    </Button>
-                  </div>
-
-                  {/* Runtime-only Controls */}
-                  <div className="rounded-md border p-3 mt-2">
-                    <div className="text-xs text-gray-500 mb-1">Runtime controls (not persisted):</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <div>
-                        <Label htmlFor="concurrency">Concurrent Lines</Label>
-                        <Input
-                          id="concurrency"
-                          type="number"
-                          min={1}
-                          max={1000}
-                          step={1}
-                          value={campaignForm.concurrentCalls}
-                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                            setCampaignForm((prev) => ({
-                              ...prev,
-                              concurrentCalls: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
-                            }))
-                          }
-                        />
-                      </div>
-                      <div className="text-xs text-gray-500 self-end">
-                        Concurrency guides dispatch pacing but is not stored in campaigns; the webhook/dispatcher reads it from description or runtime config.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
+            <Button
+              className="bg-teal-500 hover:bg-teal-600 text-white"
+              onClick={onStartCallBatch}
+              disabled={!selectedBatch || starting}
+            >
+              <Play className="h-4 w-4 mr-2" />
+              {starting ? "Starting..." : "Start Call Batch"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onStartFullBatch}
+              disabled={!selectedBatch || starting || callReady === false}
+              title={callReady === false ? "Tables not ready; run scripts/simple_auth/015_call_scheduling.sql" : ""}
+            >
+              <Play className="h-4 w-4 mr-2" />
+              Start Full Batch
+            </Button>
           </div>
         </div>
 
-        {/* Contact Batches */}
+        {callReady === false && (
+          <div className="mb-4 p-3 border border-yellow-300 bg-yellow-50 text-yellow-800 rounded">
+            Call scheduling tables are not ready. You can still run "Start Call Batch" (fallback storage), but Full Batch is disabled until you run scripts/simple_auth/015_call_scheduling.sql.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left: Batches/Contacts */}
           <div className="lg:col-span-2">
             {selectedBatch ? (
               <Card>
@@ -931,7 +596,9 @@ export default function SchedulingPage() {
                       <Button variant="ghost" size="sm" onClick={() => setSelectedBatch(null)}>
                         ← Back
                       </Button>
-                      <CardTitle className="text-black">{batchMap.get(selectedBatch)?.name || "Contacts"}</CardTitle>
+                      <CardTitle className="text-black">
+                        {batchMap.get(selectedBatch)?.name || "Contacts"}
+                      </CardTitle>
                     </div>
                     <div className="flex gap-2">
                       <Button variant="outline" size="sm" onClick={onClickImportCSV} disabled={importing}>
@@ -946,29 +613,33 @@ export default function SchedulingPage() {
                     {selectedBatchContacts.length === 0 && (
                       <div className="text-sm text-gray-500">No contacts in this batch yet.</div>
                     )}
-                    {selectedBatchContacts.map((contact) => (
-                      <div key={contact.id} className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-black">{contact.name || contact.phone || "Unknown"}</span>
-                            {!isValidPhone(contact.phone || "") && (
-                              <Badge className="bg-red-100 text-red-800 border border-red-300">Invalid Phone</Badge>
-                            )}
+                    {selectedBatchContacts.map((contact) => {
+                      const phone = contact.phone || ""
+                      const acceptable = CC_PLUS_9_REGEX.test(phone.trim())
+                      return (
+                        <div key={contact.id} className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-black">{contact.name || contact.phone || "Unknown"}</span>
+                              {!acceptable && (
+                                <Badge className="bg-red-100 text-red-800 border border-red-300">Flagged Phone</Badge>
+                              )}
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              {(contact.phone || "No phone")} • {(contact.email || "No email")} • {(contact.notes || "No notes")}
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-600">
-                            {(contact.phone || "No phone")} • {(contact.email || "No email")} • {(contact.notes || "No notes")}
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="sm" disabled title="Edit disabled">
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="text-red-600" disabled title="Delete disabled">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" disabled>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="text-red-600" disabled>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -983,11 +654,17 @@ export default function SchedulingPage() {
                       <div className="text-sm text-gray-500">No contact batches yet. Create one to get started.</div>
                     )}
                     {contactBatches.map((batch) => (
-                      <div key={batch.id} className="flex items-center gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedBatch(batch.id) }}>
+                      <div
+                        key={batch.id}
+                        className="flex items-center gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+                        onClick={() => { setSelectedBatch(batch.id) }}
+                      >
                         <Users className="h-5 w-5 text-teal-600" />
                         <div className="flex-1">
                           <div className="font-medium text-black">{batch.name}</div>
-                          <div className="text-sm text-gray-600">{batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}</div>
+                          <div className="text-sm text-gray-600">
+                            {batch.contact_count} contacts • Created {format(new Date(batch.created_at), "MMM d, yyyy")}
+                          </div>
                         </div>
                         <div className="flex gap-1">
                           <Button
@@ -1021,122 +698,222 @@ export default function SchedulingPage() {
             )}
           </div>
 
-          {/* Campaign List */}
+          {/* Right: Call Scheduling (24h) Info Panel */}
           <div>
             <Card>
-              <CardHeader>
-                <CardTitle className="text-black">Campaigns</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-black">Call Scheduling (24h Transport)</CardTitle>
+                <Button variant="ghost" size="sm" onClick={refreshPanel} disabled={!selectedBatch}>
+                  Refresh
+                </Button>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {campaigns.length === 0 && (
-                    <div className="text-sm text-gray-500">No campaigns yet. Create one to get started.</div>
-                  )}
-                  {campaigns.map((campaign) => {
-                    // derive scheduling and progress with concurrency=10
-                    const concurrency = 10
-                    const contacts = Math.max(0, campaign.target_contacts ?? 0)
-                    const totalSeconds = concurrency > 0 ? Math.ceil(contacts / concurrency) : contacts
-                    const startAtIso = (campaign as any).start_at as string | null
-                    const startAt = startAtIso ? new Date(startAtIso) : null
-                
-                    // progress based on wall-clock time from startAt to ETA
-                    let pct = 0
-                    let eta: Date | null = null
-                    let remaining = ""
-                    if (startAt && Number.isFinite(totalSeconds) && totalSeconds > 0) {
-                      eta = new Date(startAt.getTime() + totalSeconds * 1000)
-                      const now = new Date()
-                      const elapsed = Math.max(0, Math.floor((now.getTime() - startAt.getTime()) / 1000))
-                      const p = Math.min(100, Math.max(0, (elapsed / totalSeconds) * 100))
-                      pct = Number.isFinite(p) ? p : 0
-                      const remainSec = Math.max(0, Math.floor((eta.getTime() - now.getTime()) / 1000))
-                      const hh = Math.floor(remainSec / 3600)
-                      const mm = Math.floor((remainSec % 3600) / 60)
-                      const ss = Math.floor(remainSec % 60)
-                      const pad = (n: number) => n.toString().padStart(2, "0")
-                      remaining = `${hh > 0 ? `${hh}:` : ""}${pad(mm)}:${pad(ss)} remaining`
-                    }
-                
-                    return (
-                      <div key={campaign.id} className="border border-gray-200 rounded-lg p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <div>
-                            <h3 className="font-medium text-black">{campaign.name}</h3>
-                            {startAt ? (
-                              <div className="text-xs text-gray-500 flex items-center gap-1">
-                                <CalendarIcon className="h-3 w-3" />
-                                Starts {format(startAt, "PPpp")}
+                <div className="text-sm text-gray-600 mb-3">
+                  Transport queue and logs exist for 24 hours and then auto-prune. All numbers are sent to backend; red flag only indicates a non-conforming format. No actions are blocked.
+                </div>
+
+                {!selectedBatch && (
+                  <div className="text-sm text-gray-500">Select a batch to view recent sessions and logs.</div>
+                )}
+
+                {selectedBatch && (
+                  <>
+                    <div className="mb-4">
+                      <div className="text-xs text-gray-500">Selected Batch</div>
+                      <div className="text-sm">
+                        <span className="font-medium">{batchMap.get(selectedBatch)?.name}</span>{" "}
+                        <span className="text-gray-500">({batchMap.get(selectedBatch)?.contact_count ?? 0} contacts)</span>
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <div className="text-xs text-gray-500 mb-1">Latest Session</div>
+                      {lastSession ? (
+                        <div className="border rounded-md p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Badge className="bg-blue-100 text-blue-800 capitalize">{lastSession.status}</Badge>
+                              <div className="text-xs text-gray-500">
+                                {format(new Date(lastSession.created_at), "PPpp")}
                               </div>
-                            ) : (
-                              <div className="text-xs text-gray-500">No scheduled start</div>
-                            )}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              Enq: {lastSession.totals?.enqueued ?? 0} • Fail: {lastSession.totals?.errored ?? 0}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Badge className="bg-blue-100 text-blue-800 capitalize">
-                              {campaign.status}
-                            </Badge>
-                            {campaign.status !== "active" && (
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500">No sessions yet for this batch.</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs text-gray-500 mb-1">Recent Logs</div>
+                        {lastSession && recentLogs.length > 0 && (
+                          <div className="text-xs text-gray-500">Showing {recentLogs.length}{logsHasMore ? "+" : ""}</div>
+                        )}
+                      </div>
+                      {recentLogs.length === 0 ? (
+                        <div className="text-sm text-gray-500">No recent logs.</div>
+                      ) : (
+                        <>
+                          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                            {recentLogs.map((log) => {
+                              const isFailed = log.action === "failed"
+                              const isEnq = log.action === "enqueued"
+                              const flaggedInvalid = !!log.detail?.flaggedInvalid
+                              return (
+                                <div key={log.id} className="text-xs flex items-center justify-between border rounded-md p-2">
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={isFailed ? "bg-red-100 text-red-800" : isEnq ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"}>
+                                      {log.action}
+                                    </Badge>
+                                    {flaggedInvalid && (
+                                      <Badge className="bg-red-50 text-red-700 border border-red-200">Flagged</Badge>
+                                    )}
+                                    <div className="text-gray-700">
+                                      {(log.detail?.name ? `${log.detail?.name} • ` : "")}{log.detail?.phone || "unknown"}
+                                    </div>
+                                  </div>
+                                  <div className="text-gray-500">{format(new Date(log.created_at), "HH:mm:ss")}</div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          <div className="flex justify-end mt-2">
+                            {lastSession && logsHasMore && (
                               <Button
+                                variant="outline"
                                 size="sm"
-                                onClick={() => startCampaign(campaign.id)}
-                                disabled={starting && startingCampaignId === campaign.id}
-                                className="bg-teal-500 hover:bg-teal-600"
+                                disabled={logsLoading}
+                                onClick={() => fetchLogsMoreForSession(lastSession.id)}
                               >
-                                <Play className="h-4 w-4 mr-1" />{" "}
-                                {starting && startingCampaignId === campaign.id ? "Starting..." : "Start"}
+                                {logsLoading ? "Loading..." : `Load ${LOGS_PAGE_SIZE} more`}
                               </Button>
                             )}
                           </div>
-                        </div>
-                
-                        <div className="space-y-2 text-sm text-gray-600">
-                          <div className="flex items-center gap-2">
-                            <Users className="h-4 w-4" />
-                            {contacts} contacts • Concurrency {concurrency}
-                          </div>
-                
-                          {/* Visual progress based on time window */}
-                          {startAt && totalSeconds > 0 && (
-                            <div className="space-y-1">
-                              <div className="h-2 w-full bg-gray-100 rounded overflow-hidden">
-                                <div
-                                  className="h-2 bg-teal-500 transition-[width] duration-1000 ease-linear"
-                                  style={{ width: `${pct}%` }}
-                                  aria-valuenow={pct}
-                                  aria-valuemin={0}
-                                  aria-valuemax={100}
-                                />
-                              </div>
-                              <div className="flex justify-between text-xs text-gray-500">
-                                <span>{Math.round(pct)}%</span>
-                                <span>{eta ? `ETA ${format(eta, "PPpp")}` : ""}</span>
-                                <span>{remaining}</span>
-                              </div>
-                            </div>
-                          )}
-                
-                          {/* Fallback numeric estimate if no schedule */}
-                          {!startAt && (
-                            <div className="flex items-center gap-2">
-                              {(() => {
-                                const hh = Math.floor(totalSeconds / 3600)
-                                const mm = Math.floor((totalSeconds % 3600) / 60)
-                                const ss = Math.floor(totalSeconds % 60)
-                                const pad = (n: number) => n.toString().padStart(2, "0")
-                                return <span>Est. time: {hh > 0 ? `${hh}:` : ""}{pad(mm)}:{pad(ss)}</span>
-                              })()}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
+
+            {/* Optional: Quick Add Single Contact to Selected Batch (no format guidelines, no suppression) */}
+            {selectedBatch && (
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle className="text-black">Quick Add Contact</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <QuickAddContact
+                    batchId={selectedBatch}
+                    onAdded={async () => {
+                      await fetchBatchContacts(selectedBatch)
+                      // also update count in memory
+                      setContactBatches((prev) =>
+                        prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + 1 } : b))
+                      )
+                    }}
+                  />
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Lightweight widget to add a single contact to the selected batch without enforcing phone format.
+// Shows a small red flag note if the phone doesn't match CC_PLUS_9_REGEX, but still allows add.
+function QuickAddContact({ batchId, onAdded }: { batchId: string; onAdded: () => Promise<void> }) {
+  const supabase = createClient()
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [phone, setPhone] = useState("")
+  const [notes, setNotes] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  const flagged = phone.trim() !== "" && !CC_PLUS_9_REGEX.test(normalizeLoosePhone(phone))
+
+  const add = async () => {
+    setSaving(true)
+    try {
+      const { data: auth } = await (supabase as any).auth.getUser?.()
+      const userId = auth?.user?.id as string | undefined
+      if (!userId) throw new Error("Not authenticated")
+
+      const normalized = normalizeLoosePhone(phone)
+
+      const { data: contactRow, error: contactErr } = await supabase
+        .from("contacts")
+        .insert({
+          user_id: userId,
+          name: name.trim() || null,
+          email: email.trim() || null,
+          phone: normalized || phone.trim(),
+          notes: notes.trim() || null,
+        })
+        .select("id")
+        .single()
+
+      if (contactErr || !contactRow) throw contactErr || new Error("Failed to insert contact")
+
+      const { error: snapshotErr } = await supabase
+        .from("batch_contacts")
+        .insert({
+          batch_id: batchId,
+          contact_id: contactRow.id,
+          name: name.trim() || null,
+          email: email.trim() || null,
+          phone: normalized || phone.trim(),
+          notes: notes.trim() || null,
+        })
+
+      if (snapshotErr) throw snapshotErr
+
+      setName("")
+      setEmail("")
+      setPhone("")
+      setNotes("")
+      await onAdded()
+    } catch (e) {
+      console.error(e)
+      alert("Failed to add contact")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <Label htmlFor="qa-name">Name (optional)</Label>
+          <Input id="qa-name" value={name} onChange={(e: any) => setName(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="qa-email">Email (optional)</Label>
+          <Input id="qa-email" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} />
+        </div>
+        <div className="md:col-span-2">
+          <Label htmlFor="qa-phone">Phone</Label>
+          <Input id="qa-phone" placeholder="e.g., +256778825312" value={phone} onChange={(e: any) => setPhone(e.target.value)} />
+          {flagged && <div className="text-xs text-red-600 mt-1">This number format is flagged but will still be sent.</div>}
+        </div>
+        <div className="md:col-span-2">
+          <Label htmlFor="qa-notes">Notes (optional)</Label>
+          <Textarea id="qa-notes" rows={3} value={notes} onChange={(e: any) => setNotes(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button onClick={add} disabled={saving} className="bg-indigo-500 hover:bg-indigo-600">
+          {saving ? "Adding..." : "Add to Batch"}
+        </Button>
       </div>
     </div>
   )

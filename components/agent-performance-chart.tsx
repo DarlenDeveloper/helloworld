@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react"
 import { Bar, XAxis, YAxis, ResponsiveContainer, Line, ComposedChart, Tooltip } from "recharts"
 import { createClient } from "@/lib/supabase/client"
 
+// Recharts type compatibility shim for React 19/TS 5
+// Avoid TS errors about JSX element class not supporting attributes
+const XAxisAny: any = XAxis
+const YAxisAny: any = YAxis
+
 export type CallsPeriod = "weekly" | "monthly"
 
 interface Point {
@@ -55,17 +60,20 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
           start = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0)
         }
 
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) { setData([]); setLoading(false); return }
         const { data: rows, error } = await supabase
-          .from("call_history")
-          .select("call_date")
-          .gte("call_date", start.toISOString())
+          .from("calls")
+          .select("created_at")
+          .eq("user_id", user.id)
+          .gte("created_at", start.toISOString())
 
         if (error) throw error
 
         if (period === "weekly") {
           const buckets = new Array(7).fill(0)
           ;(rows || []).forEach((r: any) => {
-            const d = new Date(r.call_date)
+            const d = new Date(r.created_at)
             const startDay = new Date(start)
             const msPerDay = 24 * 3600 * 1000
             const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
@@ -77,7 +85,7 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
         } else {
           const buckets = new Array(12).fill(0)
           ;(rows || []).forEach((r: any) => {
-            const d = new Date(r.call_date)
+            const d = new Date(r.created_at)
             const monthsDiff = (d.getFullYear() - start.getFullYear()) * 12 + (d.getMonth() - start.getMonth())
             if (monthsDiff >= 0 && monthsDiff < 12) buckets[monthsDiff] += 1
           })
@@ -95,8 +103,8 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
     fetchData()
 
     const channel = supabase
-      .channel("call-history-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "call_history" }, () => {
+      .channel("calls-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
         fetchData()
       })
       .subscribe()
@@ -118,8 +126,8 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data}>
-          <XAxis dataKey="label" axisLine={false} tickLine={false} className="text-xs text-gray-500" />
-          <YAxis allowDecimals={false} />
+          <XAxisAny dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
+          <YAxisAny allowDecimals={false} tick={{ fill: "#6b7280", fontSize: 12 }} />
           <Tooltip formatter={(v: any) => [v, "Calls"]} />
           <Bar dataKey="count" fill="#e0e7ff" radius={[4, 4, 4, 4]} />
           <Line type="monotone" dataKey="line" stroke="#10b981" strokeWidth={2} dot={{ fill: "#10b981", strokeWidth: 2, r: 3 }} />

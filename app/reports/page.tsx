@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
-import { Download, FileText, Clock, Shield, Users } from "lucide-react"
+import { Clock, Users } from "lucide-react"
 
 interface LoginLog {
   id: string
@@ -97,17 +97,27 @@ export default function ReportsPage() {
     const { start, end } = getDateBounds()
 
     try {
-      // Fetch call_history within range
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) {
+        alert("Please login to generate a report")
+        return
+      }
+
+      // Fetch call_history within range for current user
       const { data: historyRows, error: histErr } = await supabase
         .from("call_history")
         .select("id,user_id,campaign_id,contact_id,status,duration,call_date,sentiment")
+        .eq("user_id", user.id)
         .gte("call_date", start.toISOString())
         .lte("call_date", end.toISOString())
 
-      // Fetch calls within range (for outbound follow-up rate)
+      // Fetch calls within range (for outbound follow-up rate) for current user
       const { data: callsRows, error: callsErr } = await supabase
         .from("calls")
         .select("id,call_type,status,created_at")
+        .eq("user_id", user.id)
         .gte("created_at", start.toISOString())
         .lte("created_at", end.toISOString())
 
@@ -257,7 +267,6 @@ export default function ReportsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-black">Reports & Export</h1>
         <Badge variant="outline" className="text-teal-600 border-teal-600">
-          <Shield className="h-4 w-4 mr-1" />
           Live Data
         </Badge>
       </div>
@@ -266,7 +275,6 @@ export default function ReportsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5 text-teal-600" />
             Report Builder
           </CardTitle>
         </CardHeader>
@@ -288,11 +296,21 @@ export default function ReportsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label htmlFor="startDate">Start Date</Label>
-              <Input id="startDate" type="date" value={dateRange.start} onChange={(e) => setDateRange((p) => ({ ...p, start: e.target.value }))} />
+              <Input
+                id="startDate"
+                type="date"
+                value={dateRange.start}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRange((p) => ({ ...p, start: e.target.value }))}
+              />
             </div>
             <div>
               <Label htmlFor="endDate">End Date</Label>
-              <Input id="endDate" type="date" value={dateRange.end} onChange={(e) => setDateRange((p) => ({ ...p, end: e.target.value }))} />
+              <Input
+                id="endDate"
+                type="date"
+                value={dateRange.end}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRange((p) => ({ ...p, end: e.target.value }))}
+              />
             </div>
           </div>
 
@@ -313,7 +331,6 @@ export default function ReportsPage() {
 
           <div className="flex items-center gap-3">
             <Button onClick={generateReport} className="bg-teal-600 hover:bg-teal-700">
-              <Download className="h-4 w-4 mr-2" />
               Generate Report
             </Button>
             <span className="text-xs text-gray-600">{metricsSummary}</span>
@@ -324,10 +341,7 @@ export default function ReportsPage() {
       {/* Audit Logs */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-teal-600" />
-            Audit Logs & Compliance
-          </CardTitle>
+          <CardTitle>Audit Logs & Compliance</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex justify-between items-center mb-4">

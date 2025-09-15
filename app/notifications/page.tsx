@@ -29,7 +29,7 @@ export default function NotificationsPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) { setLoading(false); return }
         setUserEmail(user.email ?? null)
-        await fetchInvites()
+        await fetchInvites(user.email ?? undefined)
       } finally {
         setLoading(false)
       }
@@ -38,12 +38,14 @@ export default function NotificationsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const fetchInvites = async () => {
+  const fetchInvites = async (inviteeEmail?: string) => {
     setError(null)
+    if (!inviteeEmail) { setInvitations([]); return }
     const { data, error } = await supabase
       .from("user_collaboration_invitations")
       .select("id, owner_user_id, invitee_email, role, status, created_at, expires_at")
       .eq("status", "pending")
+      .eq("invitee_email", inviteeEmail)
       .order("created_at", { ascending: false })
     if (error) { setError(error.message); setInvitations([]); return }
     setInvitations((data || []) as InvitationRow[])
@@ -58,7 +60,7 @@ export default function NotificationsPage() {
         const j = await resp.json().catch(() => ({}))
         throw new Error(j?.error || `Failed to accept: ${resp.status}`)
       }
-      await fetchInvites()
+      await fetchInvites(userEmail ?? undefined)
     } catch (e: any) {
       setError(String(e.message || e))
     } finally {

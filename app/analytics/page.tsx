@@ -4,11 +4,14 @@
 
 import { useEffect, useRef, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
-import { Calendar, Download, FileText, ChevronLeft, ChevronRight } from "lucide-react"
+import { Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
+// Recharts type compatibility shim for React 19/TS 5
+const XAxisAny: any = XAxis
+const YAxisAny: any = YAxis
 
 interface CallHistoryRow {
   id: string
@@ -29,7 +32,21 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function AnalyticsPage() {
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null)
-  const [selectedDateRange, setSelectedDateRange] = useState<Date[]>([])
+  const [selectedDateRange, setSelectedDateRange] = useState<Date[]>(() => {
+    // Default to last 7 days inclusive
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - 6)
+    start.setHours(0, 0, 0, 0)
+    end.setHours(23, 59, 59, 999)
+    const arr: Date[] = []
+    const d = new Date(start)
+    while (d <= end) {
+      arr.push(new Date(d))
+      d.setDate(d.getDate() + 1)
+    }
+    return arr
+  })
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [showModal, setShowModal] = useState(false)
   const [modalData, setModalData] = useState<any>(null)
@@ -79,23 +96,7 @@ export default function AnalyticsPage() {
         const rows = (data || []) as CallHistoryRow[]
         const days = getDaysArray(new Date(startISO), new Date(endISO))
 
-        // Aggregate daily calls
-        const countsByDay = new Map<string, number>()
-        days.forEach((d) => countsByDay.set(dateKey(d), 0))
-        rows.forEach((r) => {
-          const key = dateKey(new Date(r.call_date))
-          countsByDay.set(key, (countsByDay.get(key) || 0) + 1)
-        })
-        const newCallsData = days.map((d) => ({
-          date: d.toLocaleDateString("en-US", { weekday: "short" }),
-          fullDate: d,
-          dateLabel: `${d.toLocaleDateString("en-US", { weekday: "short" })} ${d.getMonth() + 1}/${d.getDate()}/${d
-            .getFullYear()
-            .toString()
-            .slice(-2)}`,
-          calls: countsByDay.get(dateKey(d)) || 0,
-        }))
-        setCallsData(newCallsData)
+        // callsData will be computed from the calls table below to stay consistent
 
         // Status breakdown from calls table
         const { data: callsRows, error: callsErr } = await supabase
@@ -108,6 +109,7 @@ export default function AnalyticsPage() {
         if (callsErr) {
           console.error("Status breakdown fetch error (calls):", callsErr)
           setFollowUpData([])
+          setCallsData([])
         } else {
           let completed = 0,
             missed = 0
@@ -120,6 +122,24 @@ export default function AnalyticsPage() {
             { name: "missed", value: missed, color: STATUS_COLORS["missed"] || "#ef4444" },
           ]
           setFollowUpData(follow)
+
+          // Compute Number of Calls (per-day) from calls table within selected range
+          const countsByDay = new Map<string, number>()
+          days.forEach((d) => countsByDay.set(dateKey(d), 0))
+          ;(callsRows || []).forEach((r: any) => {
+            const key = dateKey(new Date(r.created_at))
+            countsByDay.set(key, (countsByDay.get(key) || 0) + 1)
+          })
+          const newCallsData = days.map((d) => ({
+            date: d.toLocaleDateString("en-US", { weekday: "short" }),
+            fullDate: d,
+            dateLabel: `${d.toLocaleDateString("en-US", { weekday: "short" })} ${d.getMonth() + 1}/${d.getDate()}/${d
+              .getFullYear()
+              .toString()
+              .slice(-2)}`,
+            calls: countsByDay.get(dateKey(d)) || 0,
+          }))
+          setCallsData(newCallsData)
         }
 
         // Talking points from summaries/notes
@@ -186,18 +206,38 @@ export default function AnalyticsPage() {
     return days
   }
 
+  // Contiguous range picker with a max span of 7 days
   const handleDateClick = (date: Date | null) => {
     if (!date) return
+    const clicked = new Date(date.getFullYear(), date.getMonth(), date.getDate())
 
-    const dateStr = date.toDateString()
-    const existingIndex = selectedDateRange.findIndex((d) => d.toDateString() === dateStr)
-
-    if (existingIndex >= 0) {
-      setSelectedDateRange(selectedDateRange.filter((_, i) => i !== existingIndex))
-    } else if (selectedDateRange.length < 7) {
-      const newRange = [...selectedDateRange, date].sort((a, b) => a.getTime() - b.getTime())
-      setSelectedDateRange(newRange)
+    if (selectedDateRange.length === 0) {
+      setSelectedDateRange([clicked])
+      return
     }
+
+    if (selectedDateRange.length === 1) {
+      const a = new Date(selectedDateRange[0].getFullYear(), selectedDateRange[0].getMonth(), selectedDateRange[0].getDate())
+      const start = new Date(Math.min(a.getTime(), clicked.getTime()))
+      const end = new Date(Math.max(a.getTime(), clicked.getTime()))
+      const msPerDay = 24 * 3600 * 1000
+      const span = Math.floor((end.getTime() - start.getTime()) / msPerDay) + 1
+      const capped = Math.min(span, 7)
+      const cappedEnd = new Date(start)
+      cappedEnd.setDate(start.getDate() + capped - 1)
+
+      const arr: Date[] = []
+      const d = new Date(start)
+      while (d <= cappedEnd) {
+        arr.push(new Date(d))
+        d.setDate(d.getDate() + 1)
+      }
+      setSelectedDateRange(arr)
+      return
+    }
+
+    // If a range already exists, start a new range from the clicked day
+    setSelectedDateRange([clicked])
   }
 
   const isDateSelected = (date: Date | null) => {
@@ -290,11 +330,11 @@ export default function AnalyticsPage() {
           <div className="mb-4">
             <div className="flex items-center justify-between mb-4">
               <Button variant="outline" onClick={() => navigateMonth("prev")}>
-                <ChevronLeft className="h-4 w-4" />
+                ‹
               </Button>
               <h3 className="text-lg font-semibold">{monthYear}</h3>
               <Button variant="outline" onClick={() => navigateMonth("next")}>
-                <ChevronRight className="h-4 w-4" />
+                ›
               </Button>
             </div>
 
@@ -358,8 +398,8 @@ export default function AnalyticsPage() {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={callsData} barCategoryGap="20%">
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="dateLabel" angle={-45} textAnchor="end" height={80} fontSize={12} />
-                  <YAxis />
+                  <XAxisAny dataKey="dateLabel" angle={-45} textAnchor="end" height={80} fontSize={12} />
+                  <YAxisAny />
                   <Tooltip />
                   <Bar dataKey="calls" fill="#14b8a6" onClick={handleBarClick} style={{ cursor: "pointer" }} maxBarSize={40} />
                 </BarChart>
@@ -449,11 +489,9 @@ export default function AnalyticsPage() {
           <CardContent>
             <div className="flex gap-4">
               <Button onClick={downloadAllCSV} className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600">
-                <Download className="h-4 w-4" />
                 Download CSV Report
               </Button>
               <Button onClick={downloadAllPDF} variant="outline" className="flex items-center gap-2 bg-transparent">
-                <FileText className="h-4 w-4" />
                 Download PDF Report
               </Button>
             </div>
@@ -477,11 +515,9 @@ export default function AnalyticsPage() {
           </DialogHeader>
           <div className="flex gap-4 mt-4">
             <Button onClick={downloadAllCSV} className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600">
-              <Download className="h-4 w-4" />
               Download CSV
             </Button>
             <Button onClick={downloadAllPDF} variant="outline" className="flex items-center gap-2 bg-transparent">
-              <FileText className="h-4 w-4" />
               Download PDF
             </Button>
           </div>

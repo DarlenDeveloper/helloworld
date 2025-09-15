@@ -22,13 +22,11 @@ BEGIN
   DROP POLICY IF EXISTS css_update ON public.call_scheduling_sessions;
 
   CREATE POLICY css_select ON public.call_scheduling_sessions
-    FOR SELECT USING (auth.uid() = owner_id);
-
-  CREATE POLICY css_insert ON public.call_scheduling_sessions
+    FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));\nCREATE POLICY css_insert ON public.call_scheduling_sessions
     FOR INSERT WITH CHECK (auth.uid() = owner_id);
 
   CREATE POLICY css_update ON public.call_scheduling_sessions
-    FOR UPDATE USING (auth.uid() = owner_id);
+    FOR UPDATE USING (public.is_owner_or_collaborator(owner_id, FALSE));
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_css_owner ON public.call_scheduling_sessions(owner_id);
@@ -57,9 +55,7 @@ BEGIN
   DROP POLICY IF EXISTS csq_insert ON public.call_scheduling_queue;
 
   CREATE POLICY csq_select ON public.call_scheduling_queue
-    FOR SELECT USING (auth.uid() = owner_id);
-
-  CREATE POLICY csq_insert ON public.call_scheduling_queue
+    FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));\nCREATE POLICY csq_insert ON public.call_scheduling_queue
     FOR INSERT WITH CHECK (auth.uid() = owner_id);
 END $$;
 
@@ -90,9 +86,7 @@ BEGIN
   DROP POLICY IF EXISTS csl_insert ON public.call_scheduling_logs;
 
   CREATE POLICY csl_select ON public.call_scheduling_logs
-    FOR SELECT USING (auth.uid() = owner_id);
-
-  CREATE POLICY csl_insert ON public.call_scheduling_logs
+    FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));\nCREATE POLICY csl_insert ON public.call_scheduling_logs
     FOR INSERT WITH CHECK (auth.uid() = owner_id);
 END $$;
 

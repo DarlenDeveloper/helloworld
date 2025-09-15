@@ -95,11 +95,10 @@ export async function GET(request: Request) {
     const type = (searchParams.get("type") || "email").toLowerCase() as "email" | "contact"
     const filename = type === "email" ? "email_contacts.csv" : "phone_contacts.csv"
 
-    // Fetch intake rows for this user
+    // Fetch intake rows visible by RLS (owner or accepted collaborator)
     const { data, error: selErr } = await supabase
       .from("contacts_intake")
       .select("name, phone, email, country, message, created_at")
-      .eq("user_id", user.id)
       .order("created_at", { ascending: false })
 
     if (selErr) return NextResponse.json({ error: selErr.message }, { status: 500 })

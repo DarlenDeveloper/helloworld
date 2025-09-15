@@ -1,21 +1,23 @@
--- Collaborators schema to support GitHub-like invitations and acceptance
--- Idempotent migration
+-- Collaborators schema (compat-friendly). Run this if 012_collaborators.sql fails in your environment.
 
--- Role type
-DO $$ BEGIN
+-- 1) Create enum types using DO $$ blocks (avoids CREATE TYPE IF NOT EXISTS incompatibility)
+DO $$
+BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'collaborator_role') THEN
     CREATE TYPE public.collaborator_role AS ENUM ('viewer','editor');
   END IF;
-END $$;
+END
+$$;
 
--- Invitation status type
-DO $$ BEGIN
+DO $$
+BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'invitation_status') THEN
     CREATE TYPE public.invitation_status AS ENUM ('pending','accepted','revoked','expired');
   END IF;
-END $$;
+END
+$$;
 
--- Invitations table
+-- 2) Collaboration tables
 CREATE TABLE IF NOT EXISTS public.user_collaboration_invitations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -30,7 +32,6 @@ CREATE TABLE IF NOT EXISTS public.user_collaboration_invitations (
   CONSTRAINT uq_invite_owner_email_pending UNIQUE (owner_user_id, invitee_email, status)
 );
 
--- Active collaborators table
 CREATE TABLE IF NOT EXISTS public.user_collaborators (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -41,28 +42,21 @@ CREATE TABLE IF NOT EXISTS public.user_collaborators (
   CONSTRAINT uq_owner_collaborator UNIQUE (owner_user_id, collaborator_user_id)
 );
 
--- Enable RLS
+-- 3) RLS enable
 ALTER TABLE public.user_collaboration_invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_collaborators ENABLE ROW LEVEL SECURITY;
 
--- Policies for invitations
-DO $ BEGIN
-  -- Drop previous if exist
-  PERFORM 1;
-  BEGIN
-    DROP POLICY IF EXISTS inv_owner_rw ON public.user_collaboration_invitations;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS inv_invitee_read ON public.user_collaboration_invitations;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS inv_all_auth_insert ON public.user_collaboration_invitations;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS inv_invitee_accept_update ON public.user_collaboration_invitations;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-END $;
+-- 4) Drop old policies if present (safe, no DO-block needed)
+DROP POLICY IF EXISTS inv_owner_rw ON public.user_collaboration_invitations;
+DROP POLICY IF EXISTS inv_invitee_read ON public.user_collaboration_invitations;
+DROP POLICY IF EXISTS inv_invitee_accept_update ON public.user_collaboration_invitations;
 
+DROP POLICY IF EXISTS coll_read_by_party ON public.user_collaborators;
+DROP POLICY IF EXISTS coll_insert_by_party ON public.user_collaborators;
+DROP POLICY IF EXISTS coll_update_owner_only ON public.user_collaborators;
+DROP POLICY IF EXISTS coll_delete_owner_only ON public.user_collaborators;
+
+-- 5) Invitations policies
 -- Owner can read/write their invitations
 CREATE POLICY inv_owner_rw ON public.user_collaboration_invitations
   FOR ALL
@@ -70,7 +64,6 @@ CREATE POLICY inv_owner_rw ON public.user_collaboration_invitations
   WITH CHECK (auth.uid() = owner_user_id);
 
 -- Invitee can read pending invitations addressed to their email
--- Note: Supabase exposes JWT in auth.jwt(); cast to text to compare
 CREATE POLICY inv_invitee_read ON public.user_collaboration_invitations
   FOR SELECT
   USING (
@@ -90,24 +83,8 @@ CREATE POLICY inv_invitee_accept_update ON public.user_collaboration_invitations
     AND status = 'accepted'::public.invitation_status
   );
 
--- Policies for collaborators
-DO $$ BEGIN
-  PERFORM 1;
-  BEGIN
-    DROP POLICY IF EXISTS coll_read_by_party ON public.user_collaborators;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS coll_insert_by_party ON public.user_collaborators;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS coll_update_owner_only ON public.user_collaborators;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-  BEGIN
-    DROP POLICY IF EXISTS coll_delete_owner_only ON public.user_collaborators;
-  EXCEPTION WHEN undefined_object THEN NULL; END;
-END $$;
-
--- Owner or collaborator can read the row
+-- 6) Collaborator policies
+-- Owner or collaborator can read
 CREATE POLICY coll_read_by_party ON public.user_collaborators
   FOR SELECT
   USING (auth.uid() = owner_user_id OR auth.uid() = collaborator_user_id);
@@ -117,25 +94,25 @@ CREATE POLICY coll_insert_by_party ON public.user_collaborators
   FOR INSERT
   WITH CHECK (auth.uid() = owner_user_id OR auth.uid() = collaborator_user_id);
 
--- Update allowed only by owner (e.g., change role)
+-- Update and delete allowed only by owner
 CREATE POLICY coll_update_owner_only ON public.user_collaborators
   FOR UPDATE
   USING (auth.uid() = owner_user_id)
   WITH CHECK (auth.uid() = owner_user_id);
 
--- Delete allowed only by owner (revoke)
 CREATE POLICY coll_delete_owner_only ON public.user_collaborators
   FOR DELETE
   USING (auth.uid() = owner_user_id);
 
--- Indexes
+-- 7) Helpful indexes
 CREATE INDEX IF NOT EXISTS idx_inv_owner ON public.user_collaboration_invitations(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_inv_email ON public.user_collaboration_invitations(lower(invitee_email));
 CREATE INDEX IF NOT EXISTS idx_inv_status ON public.user_collaboration_invitations(status);
 CREATE INDEX IF NOT EXISTS idx_coll_owner ON public.user_collaborators(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_coll_collaborator ON public.user_collaborators(collaborator_user_id);
 
--- Optional helper function to test access logic (not yet applied to domain tables)
+-- 8) Symmetric collaborator predicate
+-- Allows access if: self OR accepted collaborator in either direction
 CREATE OR REPLACE FUNCTION public.is_owner_or_collaborator(p_owner UUID, require_editor BOOLEAN DEFAULT FALSE)
 RETURNS BOOLEAN
 LANGUAGE sql STABLE
@@ -143,9 +120,14 @@ AS $$
 SELECT (
   auth.uid() = p_owner
   OR EXISTS (
-    SELECT 1 FROM public.user_collaborators c
-    WHERE c.owner_user_id = p_owner AND c.collaborator_user_id = auth.uid()
-      AND (NOT require_editor OR c.role = 'editor')
+    SELECT 1
+    FROM public.user_collaborators c
+    WHERE (
+      (c.owner_user_id = p_owner AND c.collaborator_user_id = auth.uid())
+      OR
+      (c.owner_user_id = auth.uid() AND c.collaborator_user_id = p_owner)
+    )
+    AND (NOT require_editor OR c.role = 'editor')
   )
 );
 $$;

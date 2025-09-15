@@ -22,11 +22,11 @@ BEGIN
   DROP POLICY IF EXISTS ds_update ON public.dispatch_sessions;
 
   CREATE POLICY ds_select ON public.dispatch_sessions
-    FOR SELECT USING (auth.uid() = owner_id);
+    FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));
   CREATE POLICY ds_insert ON public.dispatch_sessions
     FOR INSERT WITH CHECK (auth.uid() = owner_id);
   CREATE POLICY ds_update ON public.dispatch_sessions
-    FOR UPDATE USING (auth.uid() = owner_id);
+    FOR UPDATE USING (public.is_owner_or_collaborator(owner_id, FALSE));
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_sessions_owner ON public.dispatch_sessions(owner_id);
@@ -53,7 +53,7 @@ BEGIN
   DROP POLICY IF EXISTS de_insert ON public.dispatch_events;
 
   CREATE POLICY de_select ON public.dispatch_events
-    FOR SELECT USING (auth.uid() = owner_id);
+    FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));
   CREATE POLICY de_insert ON public.dispatch_events
     FOR INSERT WITH CHECK (auth.uid() = owner_id);
 END $$;

@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Calendar, Download, Search, Phone, Clock } from "lucide-react"
+import { Calendar, Search, Phone, Clock } from "lucide-react"
 import { DayPicker } from "react-day-picker"
+import type { DateRange } from "react-day-picker"
 import "react-day-picker/dist/style.css"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,7 +17,7 @@ export default function CallHistoryPage() {
   const [selectedCampaign, setSelectedCampaign] = useState("all")
   const [campaignOptions, setCampaignOptions] = useState<string[]>(["all"]) 
   const [selectedFilter, setSelectedFilter] = useState("all")
-  const [selectedRange, setSelectedRange] = useState<{ from?: Date; to?: Date }>(() => {
+  const [selectedRange, setSelectedRange] = useState<DateRange | undefined>(() => {
     const end = new Date()
     const start = new Date()
     start.setDate(end.getDate() - 6)
@@ -30,7 +31,6 @@ export default function CallHistoryPage() {
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   const supabase = createClient()
-  const [orgId, setOrgId] = useState<string | null>(null)
 
   function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x }
   function endOfDay(d: Date) { const x = new Date(d); x.setHours(23,59,59,999); return x }
@@ -58,13 +58,13 @@ export default function CallHistoryPage() {
       setSelectedRange({ from, to })
       setRangeLabel('Last month')
     } else {
-      setSelectedRange({})
+      setSelectedRange(undefined)
       setRangeLabel('All time')
     }
     setIsCalendarOpen(false)
   }
   function applyRange() {
-    if (selectedRange.from && selectedRange.to) {
+    if (selectedRange?.from && selectedRange?.to) {
       setRangeLabel(`${formatDate(selectedRange.from)} - ${formatDate(selectedRange.to)}`)
     } else {
       setRangeLabel('All time')
@@ -84,37 +84,16 @@ export default function CallHistoryPage() {
         return
       }
 
-      // Resolve organization
-      const { data: membershipRows, error: memErr } = await supabase
-        .from("organization_members")
-        .select("organization_id, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
+      await fetchCallsAndCampaigns(user.id)
 
-      if (memErr) {
-        setFetchError("Failed to resolve organization")
-        return
-      }
-      const membership = (membershipRows || [])[0] as { organization_id: string } | undefined
-      if (!membership) {
-        setFetchError("No organization found for user")
-        return
-      }
-
-      const org = membership.organization_id
-      setOrgId(org)
-
-      await fetchCallsAndCampaigns(org)
-
-      // Real-time subscription scoped by organization_id
+      // Real-time subscription scoped by user_id
       const subscription = supabase
-        .channel("org:call_history")
+        .channel("user:call_history")
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "call_history", filter: `organization_id=eq.${org}` },
+          { event: "*", schema: "public", table: "call_history", filter: `user_id=eq.${user.id}` },
           () => {
-            fetchCallsAndCampaigns(org)
+            fetchCallsAndCampaigns(user.id)
           }
         )
         .subscribe()
@@ -127,13 +106,13 @@ export default function CallHistoryPage() {
     init()
   }, [supabase])
 
-  const fetchCallsAndCampaigns = async (org: string) => {
+  const fetchCallsAndCampaigns = async (userId: string) => {
     try {
-      // Fetch call history for org
+      // Fetch call history for current user
       const { data, error } = await supabase
         .from("call_history")
         .select("*, campaigns(name)")
-        .eq("organization_id", org)
+        .eq("user_id", userId)
         .order("call_date", { ascending: false })
         .limit(200)
 
@@ -184,7 +163,7 @@ export default function CallHistoryPage() {
       const { data: camps, error: campsErr } = await supabase
         .from("campaigns")
         .select("name")
-        .eq("organization_id", org)
+        .eq("user_id", userId)
         .order("created_at", { ascending: false })
 
       if (!campsErr) {
@@ -209,7 +188,7 @@ export default function CallHistoryPage() {
     const matchesFilter = selectedFilter === "all" || call.status?.toLowerCase().replace(" ", "-") === selectedFilter
 
     const matchesDate = (() => {
-      if (!selectedRange.from || !selectedRange.to) return true
+      if (!selectedRange?.from || !selectedRange?.to) return true
       const start = startOfDay(selectedRange.from).getTime()
       const end = endOfDay(selectedRange.to).getTime()
       const ts = call.ts ?? 0
@@ -294,10 +273,9 @@ export default function CallHistoryPage() {
                     selected={selectedRange}
                     onSelect={setSelectedRange}
                     weekStartsOn={1}
-                    captionLayout="buttons"
                   />
                   <div className="flex justify-end gap-2 mt-2">
-                    <Button variant="outline" className="bg-transparent" onClick={() => { setSelectedRange({}); setRangeLabel('All time'); setIsCalendarOpen(false); }}>Clear</Button>
+                    <Button variant="outline" className="bg-transparent" onClick={() => { setSelectedRange(undefined); setRangeLabel('All time'); setIsCalendarOpen(false); }}>Clear</Button>
                     <Button onClick={applyRange} className="bg-teal-500 hover:bg-teal-600">Apply</Button>
                   </div>
                 </div>
@@ -307,9 +285,8 @@ export default function CallHistoryPage() {
 
           <Button
             onClick={handleDownloadPDF}
-            className="bg-teal-500 hover:bg-teal-600 text-white flex items-center gap-2"
+            className="bg-teal-500 hover:bg-teal-600 text-white"
           >
-            <Download className="h-4 w-4" />
             Download PDF
           </Button>
         </div>
@@ -347,7 +324,7 @@ export default function CallHistoryPage() {
           <Input
             placeholder="Search contacts, phone numbers, or summaries..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
             className="pl-10"
           />
         </div>

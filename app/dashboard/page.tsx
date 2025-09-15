@@ -105,6 +105,7 @@ export default function Dashboard() {
   const [callType, setCallType] = useState<'inbound' | 'outbound'>("inbound")
   const [selectedCall, setSelectedCall] = useState<FormattedCall | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [calls, setCalls] = useState<Call[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [callStats, setCallStats] = useState<CallStats>({
@@ -131,7 +132,7 @@ export default function Dashboard() {
     const debouncedFetchData = () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => {
-        fetchData()
+        fetchData(currentUserId || undefined)
       }, 500) // Debounce real-time updates by 500ms
     }
 
@@ -145,12 +146,13 @@ export default function Dashboard() {
           return
         }
         setUser(user)
-        await fetchData()
+        setCurrentUserId(user.id)
+        await fetchData(user.id)
 
         // Only subscribe to essential updates
         callsSub = supabase
           .channel('calls-changes')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, debouncedFetchData)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls', filter: `user_id=eq.${user.id}` }, debouncedFetchData)
           .subscribe()
       } catch (error) {
         console.error("Dashboard initialization error:", error)
@@ -168,14 +170,23 @@ export default function Dashboard() {
     }
   }, [router, supabase])
 
-  const fetchData = async () => {
+  const fetchData = async (uid?: string) => {
     try {
-      // Use Promise.allSettled for parallel requests that won't fail the entire operation
+      // Resolve user id if not provided
+      let userId = uid
+      if (!userId) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        userId = user.id
+      }
+
+      // Use Promise.allSettled for parallel requests scoped to current user
       const results = await Promise.allSettled([
         // Fetch recent calls with minimal data
         supabase
           .from("calls")
           .select("id, customer_name, customer_phone, call_type, status, duration, notes, created_at")
+          .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(10),
         
@@ -183,12 +194,14 @@ export default function Dashboard() {
         supabase
           .from("calls")
           .select("call_type, status")
+          .eq("user_id", userId)
           .limit(1000), // Reasonable limit for stats
         
         // Fetch campaigns with minimal data
         supabase
           .from("campaigns")
           .select("id, name, status, target_contacts, completed_calls, success_rate, created_at")
+          .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(50),
         
@@ -196,6 +209,7 @@ export default function Dashboard() {
         supabase
           .from("call_history")
           .select("duration, cost, ai_summary, notes, call_date")
+          .eq("user_id", userId)
           .order("call_date", { ascending: false })
           .limit(500) // Limit for performance
       ])

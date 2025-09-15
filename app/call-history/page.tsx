@@ -86,12 +86,12 @@ export default function CallHistoryPage() {
 
       await fetchCallsAndCampaigns(user.id)
 
-      // Real-time subscription scoped by user_id
+      // Real-time subscription scoped by user_id (calls table)
       const subscription = supabase
-        .channel("user:call_history")
+        .channel("user:calls")
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "call_history", filter: `user_id=eq.${user.id}` },
+          { event: "*", schema: "public", table: "calls", filter: `user_id=eq.${user.id}` },
           () => {
             fetchCallsAndCampaigns(user.id)
           }
@@ -110,34 +110,30 @@ export default function CallHistoryPage() {
     try {
       // Fetch call history for current user
       const { data, error } = await supabase
-        .from("call_history")
-        .select("*, campaigns(name)")
+        .from("calls")
+        .select("id, call_type, status, customer_phone, duration, notes, created_at")
         .eq("user_id", userId)
-        .order("call_date", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(200)
 
       if (error) {
         console.error("Error fetching call history:", JSON.stringify(error, null, 2))
         setFetchError("Failed to fetch call history. Please try again later.")
       } else {
-        // Format calls
+        // Format rows from calls table
         const formattedCalls = (data || []).map((call: any) => {
           const mappedStatus =
             call.status === "completed"
               ? "Resolved"
-              : call.status === "no_answer"
+              : call.status === "missed"
               ? "No Response"
-              : call.status === "busy"
-              ? "Busy"
-              : call.status === "voicemail"
-              ? "Voicemail"
-              : "Not Resolved"
+              : "Not Resolved" // in_progress -> Not Resolved (to match existing filters)
 
-          const dt = new Date(call.call_date || call.created_at)
+          const dt = new Date(call.created_at)
           return {
             id: call.id,
             status: mappedStatus,
-            contact: call.phone_number || "Unknown",
+            contact: call.customer_phone || "Unknown",
             dateTime: dt.toLocaleString(),
             ts: dt.getTime(),
             statusColor:
@@ -145,14 +141,10 @@ export default function CallHistoryPage() {
                 ? "bg-green-500"
                 : mappedStatus === "No Response"
                 ? "bg-gray-500"
-                : mappedStatus === "Busy"
-                ? "bg-yellow-500"
-                : mappedStatus === "Voicemail"
-                ? "bg-blue-500"
                 : "bg-red-500",
-            summary: call.ai_summary || call.notes || "No summary available",
+            summary: call.notes || "No summary available",
             duration: call.duration || 0,
-            campaignName: call.campaigns?.name || null,
+            campaignName: null,
           }
         })
         setCallHistory(formattedCalls)

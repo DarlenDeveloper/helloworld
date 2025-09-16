@@ -442,9 +442,22 @@ export default function SchedulingPage() {
   }
 
   const refreshPanel = async () => {
-    if (!selectedBatch) return
+    if (!selectedBatch) {
+      setLastSession(null)
+      setRecentLogs([])
+      setLogsCursor(null)
+      setLogsHasMore(false)
+      return
+    }
     const sess = await fetchLatestSessionForBatch(selectedBatch)
-    if (sess) await fetchLogsResetForSession(sess.id)
+    if (sess) {
+      await fetchLogsResetForSession(sess.id)
+    } else {
+      // No session yet for this batch — clear previous batch's logs
+      setRecentLogs([])
+      setLogsCursor(null)
+      setLogsHasMore(false)
+    }
   }
 
   const onStartCallBatch = async () => {
@@ -454,17 +467,27 @@ export default function SchedulingPage() {
     }
     setStarting(true)
     try {
-      const res = await fetch("/api/scheduling/call/dispatch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ batch_id: selectedBatch }),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j?.error || `Failed to start call batch (${res.status})`)
-
-      // Refresh session/logs panel after a run
-      await refreshPanel()
-      alert(`Call batch session completed. Enqueued=${j?.totals?.enqueued ?? 0}, Failed=${j?.totals?.errored ?? 0}`)
+      // Run repeated sessions until no more contacts are enqueued by backend.
+      let totalEnqueued = 0
+      let totalErrored = 0
+      const maxLoops = 1000 // safety guard
+      for (let i = 0; i < maxLoops; i++) {
+        const res = await fetch("/api/scheduling/call/dispatch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: selectedBatch }),
+        })
+        const j = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(j?.error || `Failed to start call batch (${res.status})`)
+        const enq = Number(j?.totals?.enqueued ?? 0)
+        const err = Number(j?.totals?.errored ?? 0)
+        totalEnqueued += enq
+        totalErrored += err
+        await refreshPanel()
+        if (enq === 0) break
+        await sleep(500)
+      }
+      alert(`Call batch completed. Enqueued=${totalEnqueued}, Failed=${totalErrored}`)
     } catch (e: any) {
       alert(e?.message || "Failed to start call batch")
     } finally {

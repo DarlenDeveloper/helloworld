@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Batches UI (Vanilla)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #101012;
+      --muted: #f2f3f5;
+      --border: #e5e7eb;
+      --brand: #111827;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --error: #ef4444;
+      --radius: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0b0c;
+        --fg: #e8e8ea;
+        --muted: #18181b;
+        --border: #27272a;
+        --brand: #e8e8ea;
+      }
+    }
+    html, body { margin:0; padding:0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; }
+    .container { max-width: 1024px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p.sub { color: #6b7280; margin: 0 0 16px; }
+    .toolbar { display:flex; gap:8px; align-items:center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; }
+    .toolbar-left { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+    input[type="search"] { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+    select, button { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+    button.primary { background: var(--brand); color: var(--bg); border-color: var(--brand); }
+    .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+    table { border-collapse: separate; border-spacing: 0; width:100%; font-size: 14px; }
+    thead th { text-align:left; padding: 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+    tbody td { padding:10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .status { border-radius: 999px; padding: 2px 8px; font-weight: 600; font-size: 12px; }
+    .status.running { background: #064e3b; color:#34d399; }
+    .status.queued { background: #1e3a8a; color:#93c5fd; }
+    .status.paused { background: #7c2d12; color:#fbbf24; }
+    .status.completed { background: #064e3b; color:#6ee7b7; }
+    .status.failed { background: #7f1d1d; color:#fca5a5; }
+    .row-actions { text-align: right; }
+    .progress { display:flex; align-items:center; gap:8px; }
+    .bar { height:8px; width:96px; background: var(--muted); border-radius: 999px; overflow:hidden; }
+    .bar > span { display:block; height:100%; background: #34d399; }
+    .empty { padding: 24px; text-align: center; color: #6b7280; }
+    .pagination { display:flex; align-items:center; justify-content: space-between; padding: 10px; }
+    .skeleton { height: 12px; width: 80%; background: var(--muted); border-radius: 6px; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Batches</h1>
+      <p class="sub">Vanilla HTML/CSS/JS example. This does not change the server.</p>
+    </header>
+
+    <section class="toolbar">
+      <div class="toolbar-left">
+        <label for="search" class="sr-only">Search</label>
+        <input id="search" type="search" placeholder="Search batches…" />
+        <select id="status">
+          <option value="">All</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="paused">Paused</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select id="sort">
+          <option value="created_desc">Created (newest)</option>
+          <option value="created_asc">Created (oldest)</option>
+          <option value="name_asc">Name (A–Z)</option>
+          <option value="name_desc">Name (Z–A)</option>
+          <option value="status_asc">Status</option>
+        </select>
+        <select id="pageSize">
+          <option>10</option>
+          <option selected>25</option>
+          <option>50</option>
+          <option>100</option>
+        </select>
+      </div>
+      <div>
+        <button class="primary" id="newBtn">New Batch</button>
+      </div>
+    </section>
+
+    <section class="card" id="tableCard" role="region" aria-label="Batches table">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28%">Name</th>
+            <th style="width:10%">Type</th>
+            <th style="width:12%">Status</th>
+            <th style="width:18%">Created</th>
+            <th style="width:10%">Items</th>
+            <th style="width:12%">Progress</th>
+            <th style="width:10%" class="row-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
+      <div id="empty" class="empty hidden">No batches found</div>
+    </section>
+
+    <footer class="pagination">
+      <div id="count">Showing 0–0 of 0</div>
+      <div>
+        <button id="prev">Previous</button>
+        <span id="pageInfo" style="margin: 0 8px;">1 / 1</span>
+        <button id="next">Next</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const API_BASE = (location.origin || "http://localhost:3000") + "/api/batches";
+    const qs = new URLSearchParams(location.search);
+    const els = {
+      tbody: document.getElementById("tbody"),
+      empty: document.getElementById("empty"),
+      count: document.getElementById("count"),
+      pageInfo: document.getElementById("pageInfo"),
+      prev: document.getElementById("prev"),
+      next: document.getElementById("next"),
+      search: document.getElementById("search"),
+      status: document.getElementById("status"),
+      sort: document.getElementById("sort"),
+      pageSize: document.getElementById("pageSize"),
+      newBtn: document.getElementById("newBtn"),
+    };
+
+    function getInt(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : d; }
+
+    function params() {
+      return {
+        page: getInt(qs.get("page"), 1),
+        pageSize: getInt(qs.get("pageSize"), 25),
+        q: qs.get("q") || "",
+        status: qs.get("status") || "",
+        sort: qs.get("sort") || "created_desc",
+      };
+    }
+    function setParam(key, val) {
+      if (val === "" || val == null) qs.delete(key); else qs.set(key, String(val));
+      history.replaceState(null, "", "?" + qs.toString());
+      load();
+    }
+
+    function shapeSummary(row) {
+      const id = String(row.id ?? row.batchId ?? row.uuid ?? "");
+      const name = String(row.name ?? row.title ?? row.label ?? (id ? "Batch " + id.slice(0,8) : "Untitled"));
+      const type = String(row.type ?? row.channel ?? "unknown");
+      const status = String(row.status ?? row.state ?? "queued");
+      const createdAtRaw = row.createdAt ?? row.created_at ?? row.inserted_at ?? null;
+      const createdAt = createdAtRaw ? new Date(createdAtRaw).toLocaleString() : "-";
+      const itemsTotal = Number(row.itemsTotal ?? row.totalItems ?? row.count ?? 0) || 0;
+      const itemsProcessed = Number(row.itemsProcessed ?? row.processedItems ?? row.sent_count ?? 0) || 0;
+      const progressPct = itemsTotal > 0 ? Math.round((itemsProcessed / itemsTotal) * 100) : 0;
+      return { id, name, type, status, createdAt, itemsTotal, itemsProcessed, progressPct, raw: row };
+    }
+
+    function progressCell(pct) {
+      return `
+        <div class="progress">
+          <div class="bar"><span style="width:${pct}%"></span></div>
+          <span style="font-size:12px; color:#6b7280; width: 32px; display:inline-block; text-align:right;">${pct}%</span>
+        </div>
+      `;
+    }
+
+    function statusClass(s) {
+      s = String(s || "").toLowerCase();
+      return "status " + (["running","queued","paused","completed","failed"].includes(s) ? s : "");
+    }
+
+    async function load() {
+      const p = params();
+      els.search.value = p.q;
+      els.status.value = p.status;
+      els.sort.value = p.sort;
+      els.pageSize.value = String(p.pageSize);
+
+      const url = new URL(API_BASE, location.origin);
+      if (p.page) url.searchParams.set("page", p.page);
+      if (p.pageSize) url.searchParams.set("pageSize", p.pageSize);
+      if (p.q) url.searchParams.set("q", p.q);
+      if (p.status) url.searchParams.set("status", p.status);
+      if (p.sort) url.searchParams.set("sort", p.sort);
+
+      els.tbody.innerHTML = "";
+      // Skeleton rows
+      for (let i=0; i<8; i++) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><div class="skeleton"></div></td>
+          <td><div class="skeleton" style="width:60%"></div></td>
+          <td><div class="skeleton" style="width:40%"></div></td>
+          <td><div class="skeleton" style="width:80%"></div></td>
+          <td><div class="skeleton" style="width:40%"></div></td>
+          <td><div class="skeleton" style="width:70%"></div></td>
+          <td class="row-actions"><div class="skeleton" style="width:40%"></div></td>
+        `;
+        els.tbody.appendChild(tr);
+      }
+
+      try {
+        const res = await fetch(url.toString(), { credentials: "include" });
+        let payload = null;
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) payload = await res.json();
+        else payload = await res.text();
+
+        let items = [];
+        let total = 0;
+        let page = p.page;
+        let pageSize = p.pageSize;
+        if (Array.isArray(payload)) {
+          items = payload;
+          total = payload.length;
+        } else if (payload && typeof payload === "object") {
+          const maybeItems = payload.items ?? payload.data ?? payload.results ?? payload.rows ?? null;
+          if (Array.isArray(maybeItems)) items = maybeItems;
+          total = payload.total ?? payload.count ?? (Array.isArray(maybeItems) ? maybeItems.length : 0);
+          page = payload.page ?? page;
+          pageSize = payload.pageSize ?? payload.per_page ?? payload.limit ?? pageSize;
+        }
+
+        els.tbody.innerHTML = "";
+        const mapped = items.map(shapeSummary);
+        if (mapped.length === 0) {
+          els.empty.classList.remove("hidden");
+        } else {
+          els.empty.classList.add("hidden");
+          for (const r of mapped) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td><button style="background:none;border:none;color:inherit;text-align:left;cursor:pointer;" data-id="${r.id}">${r.name}</button></td>
+              <td style="text-transform:capitalize">${r.type}</td>
+              <td><span class="${statusClass(r.status)}">${r.status}</span></td>
+              <td style="color:#6b7280">${r.createdAt}</td>
+              <td>${r.itemsProcessed}/${r.itemsTotal}</td>
+              <td>${progressCell(r.progressPct)}</td>
+              <td class="row-actions"><button data-del="${r.id}">Delete</button></td>
+            `;
+            els.tbody.appendChild(tr);
+          }
+        }
+
+        const pageCount = Math.max(1, Math.ceil(Math.max(0, total) / Math.max(1, pageSize)));
+        const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+        const end = Math.min(total, page * pageSize);
+        els.count.textContent = `Showing ${start}–${end} of ${total}`;
+        els.pageInfo.textContent = `${page} / ${pageCount}`;
+        els.prev.disabled = page <= 1;
+        els.next.disabled = page >= pageCount;
+
+      } catch (e) {
+        els.tbody.innerHTML = "";
+        els.empty.classList.remove("hidden");
+        els.empty.textContent = "Failed to load. Check CORS or run this via the dev server.";
+      }
+    }
+
+    // Wire filters
+    let tHandle = null;
+    els.search.addEventListener("input", (e) => {
+      clearTimeout(tHandle);
+      tHandle = setTimeout(() => setParam("q", e.target.value.trim()), 250);
+    });
+    els.status.addEventListener("change", (e) => setParam("status", e.target.value));
+    els.sort.addEventListener("change", (e) => setParam("sort", e.target.value));
+    els.pageSize.addEventListener("change", (e) => { setParam("pageSize", e.target.value); setParam("page", 1); });
+    els.prev.addEventListener("click", () => setParam("page", Math.max(1, getInt(qs.get("page"), 1) - 1)));
+    els.next.addEventListener("click", () => setParam("page", getInt(qs.get("page"), 1) + 1));
+    els.newBtn.addEventListener("click", () => location.assign("/batches/new"));
+
+    // Delegate row actions
+    els.tbody.addEventListener("click", async (e) => {
+      const idBtn = e.target.closest("button[data-id]");
+      const delBtn = e.target.closest("button[data-del]");
+      if (idBtn) {
+        const id = idBtn.getAttribute("data-id");
+        location.assign(`/batches/${encodeURIComponent(id)}`);
+      } else if (delBtn) {
+        const id = delBtn.getAttribute("data-del");
+        if (!confirm("Delete this batch?")) return;
+        try {
+          const res = await fetch(`${API_BASE}/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "include" });
+          if (res.ok) load();
+        } catch {}
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -10,6 +10,9 @@ declare module 'next/server' {
 }
 declare module 'next/navigation' {
   export const useRouter: any;
+  export const usePathname: any;
+  export const useSearchParams: any;
+  export const useParams: any;
 }
 declare module 'next/headers' {
   export const cookies: any;
@@ -26,6 +29,7 @@ declare module '@supabase/supabase-js' {
 
 /* Common UI/utility libs */
 declare module 'lucide-react' {
+  // Commonly used icons in this project (expand as needed)
   export const Upload: any;
   export const Plus: any;
   export const Calendar: any;
@@ -36,6 +40,22 @@ declare module 'lucide-react' {
   export const Phone: any;
   export const Clock: any;
   export const Search: any;
+
+  // Sidebar / navigation icons
+  export const LayoutGrid: any;
+  export const BarChart3: any;
+  export const Brain: any;
+  export const Settings: any;
+  export const BarChart: any;
+  export const DollarSign: any;
+  export const History: any;
+  export const FileText: any;
+  export const FormInput: any;
+  export const Bell: any;
+  export const ChevronsLeft: any;
+  export const ChevronsRight: any;
+  export const MessageCircle: any;
+  export const Mail: any;
 }
 declare module 'date-fns' {
   export const format: any;
@@ -62,6 +82,11 @@ declare module 'react' {
     deps?: any[]
   ): T;
 
+  export function useCallback<T extends (...args: any[]) => any>(
+    cb: T,
+    deps?: any[]
+  ): T;
+
   export interface MutableRefObject<T> {
     current: T;
   }
@@ -70,6 +95,8 @@ declare module 'react' {
   export interface ChangeEvent<T = any> {
     target: any;
   }
+
+  export type FormEvent = any;
 
   const React: any;
   export default React;

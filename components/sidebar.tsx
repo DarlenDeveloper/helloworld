@@ -28,6 +28,7 @@ export function Sidebar() {
 
   const menuItems = [
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
+    { icon: FileText, href: "/batches", label: "Batches", active: pathname?.startsWith("/batches") },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
     { icon: MessageCircle, href: "/scheduling/whatsapp", label: "WhatsApp Scheduling", active: pathname === "/scheduling/whatsapp" },
     { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },

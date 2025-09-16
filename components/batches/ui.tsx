@@ -52,6 +52,7 @@ import {
   fetchBatchRaw,
   createBatchRaw,
   type ListParams,
+  BATCHES_API_BASE,
 } from "@/lib/api/batches"
 
 /* ===========================
@@ -557,7 +558,16 @@ export function BatchesListClient() {
     setError(null)
     const res = await fetchBatchesRaw(params)
     if (!res.ok) {
-      setError(res.error?.message || res.error?.error || "Failed to load batches")
+      let msg =
+        (res.error?.message as string) ||
+        (res.error?.error as string) ||
+        "Failed to load batches"
+      if (res.status === 404) {
+        msg = `Batches API not found at ${BATCHES_API_BASE}. Set NEXT_PUBLIC_BATCHES_API_BASE to the correct endpoint.`
+      } else if (typeof msg === "string" && /<!doctype|<html/i.test(msg)) {
+        msg = `Request failed (${res.status}). Server returned non-JSON response.`
+      }
+      setError(msg)
       setRows([])
       setTotal(0)
       setLoading(false)
@@ -708,7 +718,16 @@ export function BatchDetailClient({ id }: { id: string }) {
     setError(null)
     const res = await fetchBatchRaw(id)
     if (!res.ok) {
-      setError(res.error?.message || res.error?.error || "Failed to load batch")
+      let msg =
+        (res.error?.message as string) ||
+        (res.error?.error as string) ||
+        "Failed to load batch"
+      if (res.status === 404) {
+        msg = "Batch not found."
+      } else if (typeof msg === "string" && /<!doctype|<html/i.test(msg)) {
+        msg = `Request failed (${res.status}). Server returned non-JSON response.`
+      }
+      setError(msg)
       setRow(null)
       setLoading(false)
       return

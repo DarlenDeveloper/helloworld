@@ -134,6 +134,7 @@ export function shapeListResponse(payload: any, params?: ListParams): ListRespon
       payload.data ??
       payload.results ??
       payload.rows ??
+      payload.campaigns ?? // tolerate existing campaigns list endpoint
       null
     if (Array.isArray(maybeItems)) {
       items = maybeItems
@@ -158,7 +159,14 @@ export function shapeListResponse(payload: any, params?: ListParams): ListRespon
  * Returns raw data; caller can shape it with shapeListResponse and shapeBatchSummary.
  */
 export async function fetchBatchesRaw(params: ListParams = {}): Promise<ApiResult<unknown>> {
-  return getJson<unknown>(BATCHES_API_BASE, { query: params })
+  // Try configured/assumed base first (defaults to /api/batches).
+  const primary = await getJson<unknown>(BATCHES_API_BASE, { query: params })
+  // If that route doesn't exist in this backend, fall back to the existing /api/campaigns list.
+  if (!primary.ok && primary.status === 404 && BATCHES_API_BASE !== "/api/campaigns") {
+    const alt = await getJson<unknown>("/api/campaigns", { query: params })
+    return alt
+  }
+  return primary
 }
 
 /**

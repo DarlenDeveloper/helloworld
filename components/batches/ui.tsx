@@ -42,18 +42,8 @@ import {
 } from "@/components/ui/tabs"
 import { Card } from "@/components/ui/card"
 
-import {
-  fetchBatchesRaw,
-  shapeListResponse,
-  shapeBatchSummary,
-  type BatchSummary,
-  updateBatchRaw,
-  deleteBatchRaw,
-  fetchBatchRaw,
-  createBatchRaw,
-  type ListParams,
-  BATCHES_API_BASE,
-} from "@/lib/api/batches"
+import { type BatchSummary, type ListParams } from "@/lib/api/batches"
+import { createClient } from "@/lib/supabase/client"
 
 /* ===========================
    Utilities
@@ -201,10 +191,12 @@ export function BatchesToolbar() {
             return (
               <Button
                 key={s.key || "all"}
-                variant={selected ? "default" : "outline"}
+                variant="outline"
                 className={cn(
                   "h-9 px-3",
-                  selected && "bg-primary text-primary-foreground"
+                  selected
+                    ? "bg-neutral-900 text-white dark:bg-neutral-900 dark:text-white border-neutral-900 hover:bg-neutral-900/90"
+                    : ""
                 )}
                 aria-pressed={selected}
                 onClick={() =>
@@ -260,7 +252,7 @@ export function BatchesToolbar() {
           </SelectContent>
         </Select>
 
-        <Button asChild className="ml-1">
+        <Button asChild className="ml-1 bg-neutral-900 text-white hover:bg-neutral-900/90">
           <Link href="/batches/new" aria-label="Create new batch">
             New Batch
           </Link>
@@ -276,10 +268,12 @@ export function BatchesToolbar() {
               <Button
                 key={s.key || "all"}
                 size="sm"
-                variant={selected ? "default" : "outline"}
+                variant="outline"
                 className={cn(
                   "h-8 px-2 rounded-full",
-                  selected && "bg-primary text-primary-foreground"
+                  selected
+                    ? "bg-neutral-900 text-white dark:bg-neutral-900 dark:text-white border-neutral-900 hover:bg-neutral-900/90"
+                    : ""
                 )}
                 aria-pressed={selected}
                 onClick={() =>
@@ -403,7 +397,7 @@ export function EmptyState({
           <p className="text-muted-foreground">{description}</p>
         )}
         {actionHref && actionText && (
-          <Button asChild className="mt-2">
+          <Button asChild className="mt-2 bg-neutral-900 text-white hover:bg-neutral-900/90">
             <Link href={actionHref}>{actionText}</Link>
           </Button>
         )}
@@ -556,28 +550,61 @@ export function BatchesListClient() {
   const load = React.useCallback(async () => {
     setLoading(true)
     setError(null)
-    const res = await fetchBatchesRaw(params)
-    if (!res.ok) {
-      let msg =
-        (res.error?.message as string) ||
-        (res.error?.error as string) ||
-        "Failed to load batches"
-      if (res.status === 404) {
-        msg = `Batches API not found at ${BATCHES_API_BASE}. Set NEXT_PUBLIC_BATCHES_API_BASE to the correct endpoint.`
-      } else if (typeof msg === "string" && /<!doctype|<html/i.test(msg)) {
-        msg = `Request failed (${res.status}). Server returned non-JSON response.`
+    try {
+      const supabase = createClient()
+      const { data: { user }, error: authErr } = await supabase.auth.getUser()
+      if (authErr) throw authErr
+      if (!user) {
+        setError("Not authenticated")
+        setRows([])
+        setTotal(0)
+        setLoading(false)
+        return
       }
-      setError(msg)
+
+      let { data, error } = await supabase
+        .from("contact_batches")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+
+      if (error) throw error
+
+      let arr = (data || []) as any[]
+
+      // Client-side search by name
+      if (params.q) {
+        const ql = params.q.toLowerCase()
+        arr = arr.filter((r) => (r.name || "").toLowerCase().includes(ql))
+      }
+
+      const page = params.page ?? 1
+      const pageSize = params.pageSize ?? 25
+      const totalCount = arr.length
+      const start = (page - 1) * pageSize
+      const paged = arr.slice(start, start + pageSize)
+
+      const mapped = paged.map((b: any) => ({
+        id: String(b.id),
+        name: String(b.name ?? `Batch ${String(b.id).slice(0, 8)}`),
+        type: "call",
+        status: "queued",
+        createdAt: b.created_at,
+        itemsTotal: Number(b.contact_count ?? 0),
+        itemsProcessed: 0,
+        progressPct: 0,
+        raw: b,
+      })) as BatchSummary[]
+
+      setRows(mapped)
+      setTotal(totalCount)
+    } catch (e: any) {
+      setError(e?.message || "Failed to load batches")
       setRows([])
       setTotal(0)
+    } finally {
       setLoading(false)
-      return
     }
-    const list = shapeListResponse(res.data, params)
-    const mapped = list.items.map((it: any) => shapeBatchSummary(it))
-    setRows(mapped)
-    setTotal(list.total)
-    setLoading(false)
   }, [params])
 
   React.useEffect(() => {
@@ -596,39 +623,35 @@ export function BatchesListClient() {
   )
 
   const onToggleStatus = React.useCallback(async (row: BatchSummary) => {
-    // Optimistic UI: toggle paused/running only
     const nextStatus =
       row.status === "paused" ? "running" : row.status === "running" ? "paused" : row.status
 
-    // Optimistically update local state
+    // UI-only toggle to avoid backend schema changes
     setRows((prev) =>
       (prev ?? []).map((r) =>
         r.id === row.id ? { ...r, status: nextStatus } : r
       )
     )
-
-    const res = await updateBatchRaw(row.id, { status: nextStatus })
-    if (!res.ok) {
-      // revert on error
-      setRows((prev) =>
-        (prev ?? []).map((r) =>
-          r.id === row.id ? { ...r, status: row.status } : r
-        )
-      )
-      console.error("Failed to update status", res.error)
-    }
   }, [])
 
   const onDelete = React.useCallback(async (row: BatchSummary) => {
     if (!confirm(`Delete batch "${row.name}"? This cannot be undone.`)) return
-    const res = await deleteBatchRaw(row.id)
-    if (!res.ok) {
-      console.error("Delete failed", res.error)
-      return
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error("Not authenticated")
+      const { error } = await supabase
+        .from("contact_batches")
+        .delete()
+        .eq("id", row.id)
+        .eq("user_id", user.id)
+      if (error) throw error
+
+      setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id))
+      setTotal((t) => Math.max(0, t - 1))
+    } catch (err) {
+      console.error("Delete failed", err)
     }
-    // Refresh
-    setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id))
-    setTotal((t) => Math.max(0, t - 1))
   }, [])
 
   const page = params.page ?? 1
@@ -638,12 +661,20 @@ export function BatchesListClient() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Batches</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold">Batches</h1>
+            <Badge
+              variant="outline"
+              className="uppercase tracking-wide text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800"
+            >
+              Beta
+            </Badge>
+          </div>
           <p className="text-sm text-muted-foreground">
             Manage and monitor batch executions.
           </p>
         </div>
-        <Button asChild className="hidden sm:inline-flex">
+        <Button asChild className="hidden sm:inline-flex bg-neutral-900 text-white hover:bg-neutral-900/90">
           <Link href="/batches/new">New Batch</Link>
         </Button>
       </div>
@@ -716,24 +747,34 @@ export function BatchDetailClient({ id }: { id: string }) {
   const load = React.useCallback(async () => {
     setLoading(true)
     setError(null)
-    const res = await fetchBatchRaw(id)
-    if (!res.ok) {
-      let msg =
-        (res.error?.message as string) ||
-        (res.error?.error as string) ||
-        "Failed to load batch"
-      if (res.status === 404) {
-        msg = "Batch not found."
-      } else if (typeof msg === "string" && /<!doctype|<html/i.test(msg)) {
-        msg = `Request failed (${res.status}). Server returned non-JSON response.`
+    try {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from("contact_batches")
+        .select("*")
+        .eq("id", id)
+        .single()
+      if (error || !data) throw error || new Error("Not found")
+
+      const b: any = data
+      const mapped: BatchSummary = {
+        id: String(b.id),
+        name: String(b.name ?? `Batch ${String(b.id).slice(0, 8)}`),
+        type: "call",
+        status: "queued",
+        createdAt: b.created_at,
+        itemsTotal: Number(b.contact_count ?? 0),
+        itemsProcessed: 0,
+        progressPct: 0,
+        raw: b,
       }
-      setError(msg)
+      setRow(mapped)
+    } catch (e: any) {
+      setError(e?.message || "Failed to load batch")
       setRow(null)
+    } finally {
       setLoading(false)
-      return
     }
-    setRow(shapeBatchSummary(res.data))
-    setLoading(false)
   }, [id])
 
   React.useEffect(() => {
@@ -745,12 +786,8 @@ export function BatchDetailClient({ id }: { id: string }) {
     const nextStatus =
       row.status === "paused" ? "running" : row.status === "running" ? "paused" : row.status
 
-    setRow({ ...row, status: nextStatus })
-    const res = await updateBatchRaw(row.id, { status: nextStatus })
-    if (!res.ok) {
-      console.error("Failed to update status", res.error)
-      setRow((prev) => (prev ? { ...prev, status: row.status } : prev))
-    }
+    // UI-only toggle to avoid backend schema changes
+    setRow((prev) => (prev ? { ...prev, status: nextStatus } : prev))
   }, [row])
 
   if (loading) {
@@ -786,7 +823,15 @@ export function BatchDetailClient({ id }: { id: string }) {
           >
             ← Back
           </Button>
-          <h1 className="text-2xl font-semibold">{row.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold">{row.name}</h1>
+            <Badge
+              variant="outline"
+              className="uppercase tracking-wide text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800"
+            >
+              Beta
+            </Badge>
+          </div>
           <div className="mt-1 text-sm text-muted-foreground">
             Created {fmtDate(row.createdAt)}
           </div>
@@ -888,18 +933,23 @@ export function BatchFormClient({
     if (mode !== "edit" || !id) return
     ;(async () => {
       setLoading(true)
-      const res = await fetchBatchRaw(id)
-      if (!res.ok) {
-        setError(res.error?.message || "Failed to load batch")
+      try {
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from("contact_batches")
+          .select("*")
+          .eq("id", id)
+          .single()
+        if (error || !data) throw error || new Error("Failed to load batch")
+        setState({
+          name: String((data as any).name ?? ""),
+          type: "email",
+        })
+      } catch (e: any) {
+        setError(e?.message || "Failed to load batch")
+      } finally {
         setLoading(false)
-        return
       }
-      const shaped = shapeBatchSummary(res.data)
-      setState({
-        name: shaped.name || "",
-        type: shaped.type || "email",
-      })
-      setLoading(false)
     })()
   }, [mode, id])
 
@@ -908,23 +958,26 @@ export function BatchFormClient({
     setSaving(true)
     setError(null)
     try {
-      const payload = {
-        name: state.name,
-        type: state.type,
-      } as const
-      const res =
-        mode === "create"
-          ? await createBatchRaw(payload)
-          : await updateBatchRaw(id!, payload)
-      if (!res.ok) {
-        setError(res.error?.message || res.error?.error || "Save failed")
-        setSaving(false)
-        return
+      const supabase = createClient()
+      if (mode === "create") {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) throw new Error("Not authenticated")
+        const { error } = await supabase
+          .from("contact_batches")
+          .insert({ user_id: user.id, name: state.name, description: null })
+        if (error) throw error
+      } else {
+        const { error } = await supabase
+          .from("contact_batches")
+          .update({ name: state.name })
+          .eq("id", id!)
+        if (error) throw error
       }
       router.push("/batches")
     } catch (err: any) {
-      setError(err?.message || "Unexpected error")
+      setError(err?.message || "Save failed")
       setSaving(false)
+      return
     }
   }
 
@@ -991,7 +1044,7 @@ export function BatchFormClient({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={saving}>
+        <Button type="submit" disabled={saving} className="bg-neutral-900 text-white hover:bg-neutral-900/90 disabled:opacity-60">
           {saving ? "Saving…" : "Save"}
         </Button>
         <Button

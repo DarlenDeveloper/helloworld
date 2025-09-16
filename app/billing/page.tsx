@@ -19,19 +19,39 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  CreditCard,
-  Smartphone,
-  Phone,
-  Plus,
-  Settings,
-  AlertCircle,
-  ChevronDown,
-  ChevronUp,
-  Edit,
-  Calendar,
-} from "lucide-react"
+import { Phone, Plus, Settings, Edit, Calendar } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
+
+// Local fallback icons (SVG) to avoid lucide-react version mismatches
+const ChevronDownIcon = (props: any) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+)
+const ChevronUpIcon = (props: any) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <path d="M18 15l-6-6-6 6" />
+  </svg>
+)
+const AlertCircleIcon = (props: any) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+)
+const CreditCardIcon = (props: any) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
+    <line x1="2" y1="10" x2="22" y2="10" />
+  </svg>
+)
+const SmartphoneIcon = (props: any) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <rect x="7" y="2" width="10" height="20" rx="2" ry="2" />
+    <line x1="12" y1="18" x2="12.01" y2="18" />
+  </svg>
+)
 
 const packages = [
   { id: "starter", name: "Starter", price: 481000, agents: 2, minutes: 300 },
@@ -68,7 +88,7 @@ export default function BillingPage() {
 
   const renewalDate = new Date()
 
-  // Gate access: owner or major collaborator (editor)
+  // Gate access: owner or admin member
   useEffect(() => {
     if (!supabaseRef.current) {
       supabaseRef.current = createClient()
@@ -79,17 +99,19 @@ export default function BillingPage() {
       try {
         const { data: { user } } = await supabase!.auth.getUser()
         if (!user) { setAccessAllowed(false); return }
-        const { data: collRows, error } = await supabase!
-          .from("user_collaborators")
-          .select("owner_user_id, collaborator_user_id, role")
-          .eq("collaborator_user_id", user.id)
+        const { data: memberships, error } = await supabase!
+          .from("account_users")
+          .select("owner_user_id, member_user_id, role, is_active")
+          .eq("member_user_id", user.id)
+          .eq("is_active", true)
         if (error) { setAccessAllowed(false); return }
-        if (!collRows || collRows.length === 0) {
+        if (!memberships || memberships.length === 0) {
+          // No memberships implies I'm acting as owner of my own account
           setAccessAllowed(true)
           return
         }
-        const major = (collRows as any[]).some((r) => r.role === "editor")
-        setAccessAllowed(major)
+        const admin = (memberships as any[]).some((r) => String((r as any).role || "").toLowerCase() === "admin")
+        setAccessAllowed(admin)
       } catch {
         setAccessAllowed(false)
       }
@@ -147,7 +169,7 @@ export default function BillingPage() {
         <Card className="max-w-md">
           <CardHeader>
             <CardTitle>Not authorized</CardTitle>
-            <CardDescription>Only the owner or a major collaborator can access billing and subscriptions.</CardDescription>
+            <CardDescription>Only the owner or an admin member can access billing and subscriptions.</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -181,9 +203,9 @@ export default function BillingPage() {
 
               <div className="bg-blue-50 p-4 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
-                  {paymentMethod === "mtn" && <Smartphone className="h-5 w-5 text-yellow-600" />}
+                  {paymentMethod === "mtn" && <SmartphoneIcon className="h-5 w-5 text-yellow-600" />}
                   {paymentMethod === "airtel" && <Phone className="h-5 w-5 text-red-600" />}
-                  {paymentMethod === "card" && <CreditCard className="h-5 w-5 text-blue-600" />}
+                  {paymentMethod === "card" && <CreditCardIcon className="h-5 w-5 text-blue-600" />}
                   <span className="font-medium">
                     {paymentMethod === "mtn" && "MTN Mobile Money"}
                     {paymentMethod === "airtel" && "Airtel Money"}
@@ -237,7 +259,7 @@ export default function BillingPage() {
                 <Phone className="h-5 w-5 text-teal-500" />
                 Minutes Usage
               </div>
-              {expandedSections.minutes ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+              {expandedSections.minutes ? <ChevronUpIcon className="h-5 w-5" /> : <ChevronDownIcon className="h-5 w-5" />}
             </CardTitle>
             <CardDescription>Track your remaining minutes and add more as needed</CardDescription>
           </CardHeader>
@@ -301,7 +323,7 @@ export default function BillingPage() {
                     type="number"
                     placeholder="Enter minutes (10-10000)"
                     value={customMinutes}
-                    onChange={(e) => setCustomMinutes(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomMinutes(e.target.value)}
                     min="10"
                     max="10000"
                   />
@@ -319,7 +341,7 @@ export default function BillingPage() {
           <CardHeader className="cursor-pointer" onClick={() => toggleSection("package")}>
             <CardTitle className="flex items-center justify-between">
               Current Package
-              {expandedSections.package ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+              {expandedSections.package ? <ChevronUpIcon className="h-5 w-5" /> : <ChevronDownIcon className="h-5 w-5" />}
             </CardTitle>
             <CardDescription>Manage your subscription plan</CardDescription>
           </CardHeader>
@@ -371,7 +393,7 @@ export default function BillingPage() {
                 <Settings className="h-5 w-5 text-teal-500" />
                 Payment Settings
               </div>
-              {expandedSections.payment ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+              {expandedSections.payment ? <ChevronUpIcon className="h-5 w-5" /> : <ChevronDownIcon className="h-5 w-5" />}
             </CardTitle>
             <CardDescription>Manage your payment preferences</CardDescription>
           </CardHeader>
@@ -394,7 +416,7 @@ export default function BillingPage() {
                       className={`flex-1 flex items-center gap-2 ${paymentMethod === "mtn" ? "bg-teal-500 hover:bg-teal-600" : ""}`}
                       onClick={() => setPaymentMethod("mtn")}
                     >
-                      <Smartphone className="h-4 w-4" />
+                      <SmartphoneIcon className="h-4 w-4" />
                       MTN Momo
                     </Button>
                     {paymentMethod === "mtn" && (
@@ -424,7 +446,7 @@ export default function BillingPage() {
                       className={`flex-1 flex items-center gap-2 ${paymentMethod === "card" ? "bg-teal-500 hover:bg-teal-600" : ""}`}
                       onClick={() => setPaymentMethod("card")}
                     >
-                      <CreditCard className="h-4 w-4" />
+                      <CreditCardIcon className="h-4 w-4" />
                       Credit Card
                     </Button>
                     {paymentMethod === "card" && (
@@ -438,7 +460,7 @@ export default function BillingPage() {
 
               <div className="pt-4 border-t">
                 <Button variant="destructive" className="flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4" />
+                  <AlertCircleIcon className="h-4 w-4" />
                   Cancel Subscription
                 </Button>
               </div>

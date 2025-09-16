@@ -603,6 +603,16 @@ export function BatchesListClient() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [nonce, setNonce] = React.useState(0)
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null)
+  const [adminOwners, setAdminOwners] = React.useState<Set<string>>(new Set())
+
+  // Permission helper: can current user edit the given row (owner or editor collaborator)?
+  const canEditRow = React.useCallback((row: BatchSummary) => {
+    const ownerId = String((((row as any)?.raw as any)?.user_id) ?? "")
+    if (!ownerId) return false
+    if (currentUserId && ownerId === currentUserId) return true
+    return adminOwners.has(ownerId)
+  }, [currentUserId, adminOwners])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -619,13 +629,26 @@ export function BatchesListClient() {
         return
       }
 
+      // Fetch batches (RLS will return owned + collaborator-shared)
       let { data, error } = await supabase
         .from("contact_batches")
         .select("*")
-        .eq("user_id", user.id)
         .order("created_at", { ascending: false })
 
       if (error) throw error
+
+      // Resolve my editor permissions (owners for whom I'm an 'editor')
+      setCurrentUserId(user.id)
+      const { data: memberships } = await supabase
+        .from("account_users")
+        .select("owner_user_id, member_user_id, role, is_active")
+        .eq("member_user_id", user.id)
+        .eq("is_active", true)
+      const adminSet = new Set<string>()
+      ;(memberships || []).forEach((m: any) => {
+        if (String(m.role || "").toLowerCase() === "admin") adminSet.add((m as any).owner_user_id)
+      })
+      setAdminOwners(adminSet)
 
       let arr = (data || []) as any[]
 
@@ -642,11 +665,9 @@ export function BatchesListClient() {
       const paged = arr.slice(start, start + pageSize)
 
       // Enrich each batch with live contact count and last enqueued for progress
-      const ids = paged.map((b: any) => String(b.id))
       const enriched = await Promise.all(
         paged.map(async (b: any) => {
           const id = String(b.id)
-          // Prefer live count from batch_contacts; fall back to stored contact_count
           const liveCount = await countContactsForBatch(supabase, id)
           const itemsTotal = liveCount > 0 ? liveCount : Number(b.contact_count ?? 0)
           const enqueued = await getLastSessionEnqueued(supabase, id)
@@ -695,28 +716,33 @@ export function BatchesListClient() {
   )
 
   const onToggleStatus = React.useCallback(async (row: BatchSummary) => {
+    if (!canEditRow(row)) {
+      alert("Insufficient permission: admin required for this batch.")
+      return
+    }
     const nextStatus =
       row.status === "paused" ? "running" : row.status === "running" ? "paused" : row.status
 
     // UI-only toggle to avoid backend schema changes
-   setRows((prev) =>
+    setRows((prev) =>
       (prev ?? []).map((r) =>
         r.id === row.id ? { ...r, status: nextStatus } : r
       )
     )
-  }, [])
+  }, [canEditRow])
 
   const onDelete = React.useCallback(async (row: BatchSummary) => {
     if (!confirm(`Delete batch "${row.name}"? This cannot be undone.`)) return
+    if (!canEditRow(row)) {
+      alert("Insufficient permission: admin required for this batch.")
+      return
+    }
     try {
       const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error("Not authenticated")
       const { error } = await supabase
         .from("contact_batches")
         .delete()
         .eq("id", row.id)
-        .eq("user_id", user.id)
       if (error) throw error
 
       setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id))
@@ -724,9 +750,13 @@ export function BatchesListClient() {
     } catch (err) {
       console.error("Delete failed", err)
     }
-  }, [])
+  }, [canEditRow])
 
   const onCallBatch = React.useCallback(async (row: BatchSummary) => {
+    if (!canEditRow(row)) {
+      alert("Insufficient permission: admin required for this batch.")
+      return
+    }
     try {
       let totalEnqueued = 0
       let totalErrored = 0
@@ -754,7 +784,7 @@ export function BatchesListClient() {
     } catch (e: any) {
       alert(e?.message || "Failed to call batch")
     }
-  }, [])
+  }, [canEditRow])
 
   const page = params.page ?? 1
   const pageSize = params.pageSize ?? 25
@@ -776,9 +806,14 @@ export function BatchesListClient() {
             Manage and monitor batch executions.
           </p>
         </div>
-        <Button asChild className="hidden sm:inline-flex bg-neutral-900 text-white hover:bg-neutral-900/90">
-          <Link href="/batches/new">New Batch</Link>
-        </Button>
+        <div className="hidden sm:flex items-center gap-2">
+          <Button asChild className="bg-neutral-900 text-white hover:bg-neutral-900/90">
+            <Link href="/batches/new">New Batch</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href="/users">Add Secondary User</Link>
+          </Button>
+        </div>
       </div>
 
       <BatchesToolbar />
@@ -846,6 +881,7 @@ export function BatchDetailClient({ id }: { id: string }) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [activeTab, setActiveTab] = React.useState("overview")
+  const [canEdit, setCanEdit] = React.useState(false)
 
   // Manage Contacts (CSV import + Quick Add)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -890,6 +926,27 @@ export function BatchDetailClient({ id }: { id: string }) {
         raw: b,
       }
       setRow(mapped)
+
+      // Resolve canEdit (owner or 'admin' member)
+      const { data: auth } = await (supabase as any).auth.getUser?.()
+      const me = auth?.user?.id || null
+      let edit = false
+      if (me) {
+        if (me === (b as any).user_id) {
+          edit = true
+        } else {
+          const { data: memberships } = await supabase
+            .from("account_users")
+            .select("role, is_active")
+            .eq("owner_user_id", (b as any).user_id)
+            .eq("member_user_id", me)
+            .eq("is_active", true)
+            .limit(1)
+          const role = (memberships || [])[0]?.role?.toLowerCase?.()
+          if (role === "admin") edit = true
+        }
+      }
+      setCanEdit(edit)
     } catch (e: any) {
       setError(e?.message || "Failed to load batch")
       setRow(null)
@@ -914,6 +971,10 @@ export function BatchDetailClient({ id }: { id: string }) {
   // Start Call Batch (loop until backend returns enqueued=0)
   const onStartCallBatch = React.useCallback(async () => {
     if (!row) return
+    if (!canEdit) {
+      alert("Insufficient permission: admin required for this batch.")
+      return
+    }
     try {
       let totalEnqueued = 0
       let totalErrored = 0
@@ -938,7 +999,7 @@ export function BatchDetailClient({ id }: { id: string }) {
     } catch (e: any) {
       alert(e?.message || "Failed to call batch")
     }
-  }, [row, load])
+  }, [row, load, canEdit])
 
   // CSV parser (accepts anything; light sanitization; no skipping by format)
   const parseCSV = (text: string): { rows: { phone: string; notes: string }[] } => {
@@ -965,6 +1026,7 @@ export function BatchDetailClient({ id }: { id: string }) {
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!row) return
+    if (!canEdit) { alert("Insufficient permission: admin required"); return }
     const file = e.target.files?.[0]
     e.target.value = "" // reset for next time
     if (!file) return
@@ -1035,9 +1097,9 @@ export function BatchDetailClient({ id }: { id: string }) {
           }
         }
 
-       totalInserted += contactRows.length
-       setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
-       allowedRemaining -= contactRows.length
+        totalInserted += contactRows.length
+        setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
+        allowedRemaining -= contactRows.length
       }
 
       if (totalInserted > 0) {
@@ -1068,6 +1130,7 @@ export function BatchDetailClient({ id }: { id: string }) {
 
   const quickAdd = async () => {
     if (!id) return
+    if (!canEdit) { alert("Insufficient permission: admin required"); return }
     setQaSaving(true)
     try {
       const supabase = createClient()
@@ -1185,7 +1248,7 @@ export function BatchDetailClient({ id }: { id: string }) {
           <Button variant="outline" asChild>
             <Link href={`/batches/${encodeURIComponent(row.id)}/edit`}>Edit</Link>
           </Button>
-          <Button className="bg-neutral-900 text-white hover:bg-neutral-900/90" onClick={onStartCallBatch}>
+          <Button className="bg-neutral-900 text-white hover:bg-neutral-900/90" onClick={onStartCallBatch} disabled={!canEdit} title={!canEdit ? "Viewer role: start disabled" : undefined}>
             Start Call Batch
           </Button>
         </div>
@@ -1226,7 +1289,7 @@ export function BatchDetailClient({ id }: { id: string }) {
               className="hidden"
               onChange={handleImportFile}
             />
-            <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={!canEdit || importing} title={!canEdit ? "Viewer role: import disabled" : undefined}>
               {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
             </Button>
           </div>
@@ -1252,7 +1315,7 @@ export function BatchDetailClient({ id }: { id: string }) {
           </div>
         </div>
         <div className="flex justify-end">
-          <Button onClick={quickAdd} disabled={qaSaving} className="bg-neutral-900 text-white hover:bg-neutral-900/90">
+          <Button onClick={quickAdd} disabled={!canEdit || qaSaving} title={!canEdit ? "Viewer role: add disabled" : undefined} className="bg-neutral-900 text-white hover:bg-neutral-900/90">
             {qaSaving ? "Adding..." : "Add to Batch"}
           </Button>
         </div>

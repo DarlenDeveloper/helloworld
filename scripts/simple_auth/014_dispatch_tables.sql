@@ -61,3 +61,33 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_dispatch_events_session ON public.dispatch_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_events_owner ON public.dispatch_events(owner_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_events_campaign ON public.dispatch_events(campaign_id);
+-- RBAC policies: viewers can read; owners/editors can write
+
+-- Ensure idempotency for dispatch_sessions policies
+DO $$ BEGIN
+  BEGIN
+    DROP POLICY IF EXISTS ds_select ON public.dispatch_sessions;
+    DROP POLICY IF EXISTS ds_insert ON public.dispatch_sessions;
+    DROP POLICY IF EXISTS ds_update ON public.dispatch_sessions;
+  EXCEPTION WHEN undefined_object THEN NULL; END;
+END $$;
+
+CREATE POLICY ds_select ON public.dispatch_sessions
+  FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));
+CREATE POLICY ds_insert ON public.dispatch_sessions
+  FOR INSERT WITH CHECK (public.is_owner_or_collaborator(owner_id, TRUE));
+CREATE POLICY ds_update ON public.dispatch_sessions
+  FOR UPDATE USING (public.is_owner_or_collaborator(owner_id, TRUE));
+
+-- Ensure idempotency for dispatch_events policies
+DO $$ BEGIN
+  BEGIN
+    DROP POLICY IF EXISTS de_select ON public.dispatch_events;
+    DROP POLICY IF EXISTS de_insert ON public.dispatch_events;
+  EXCEPTION WHEN undefined_object THEN NULL; END;
+END $$;
+
+CREATE POLICY de_select ON public.dispatch_events
+  FOR SELECT USING (public.is_owner_or_collaborator(owner_id, FALSE));
+CREATE POLICY de_insert ON public.dispatch_events
+  FOR INSERT WITH CHECK (public.is_owner_or_collaborator(owner_id, TRUE));

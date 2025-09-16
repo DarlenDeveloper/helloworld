@@ -30,9 +30,9 @@ DROP POLICY IF EXISTS calls_insert ON public.calls;
 DROP POLICY IF EXISTS calls_update ON public.calls;
 DROP POLICY IF EXISTS calls_delete ON public.calls;
 CREATE POLICY calls_read   ON public.calls FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY calls_insert ON public.calls FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY calls_update ON public.calls FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY calls_delete ON public.calls FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY calls_insert ON public.calls FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY calls_update ON public.calls FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY calls_delete ON public.calls FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Campaigns
 ALTER TABLE public.campaigns ENABLE ROW LEVEL SECURITY;
@@ -42,9 +42,9 @@ DROP POLICY IF EXISTS campaigns_insert ON public.campaigns;
 DROP POLICY IF EXISTS campaigns_update ON public.campaigns;
 DROP POLICY IF EXISTS campaigns_delete ON public.campaigns;
 CREATE POLICY campaigns_read   ON public.campaigns FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY campaigns_insert ON public.campaigns FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY campaigns_update ON public.campaigns FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY campaigns_delete ON public.campaigns FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY campaigns_insert ON public.campaigns FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY campaigns_update ON public.campaigns FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY campaigns_delete ON public.campaigns FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Contact batches
 ALTER TABLE public.contact_batches ENABLE ROW LEVEL SECURITY;
@@ -54,9 +54,9 @@ DROP POLICY IF EXISTS contact_batches_insert ON public.contact_batches;
 DROP POLICY IF EXISTS contact_batches_update ON public.contact_batches;
 DROP POLICY IF EXISTS contact_batches_delete ON public.contact_batches;
 CREATE POLICY contact_batches_read   ON public.contact_batches FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contact_batches_insert ON public.contact_batches FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY contact_batches_update ON public.contact_batches FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contact_batches_delete ON public.contact_batches FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY contact_batches_insert ON public.contact_batches FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contact_batches_update ON public.contact_batches FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contact_batches_delete ON public.contact_batches FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Campaign <-> Batch linking (no owner column; authenticated access)
 ALTER TABLE public.campaign_batches ENABLE ROW LEVEL SECURITY;
@@ -78,9 +78,9 @@ DROP POLICY IF EXISTS call_history_insert ON public.call_history;
 DROP POLICY IF EXISTS call_history_update ON public.call_history;
 DROP POLICY IF EXISTS call_history_delete ON public.call_history;
 CREATE POLICY call_history_read   ON public.call_history FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY call_history_insert ON public.call_history FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY call_history_update ON public.call_history FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY call_history_delete ON public.call_history FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY call_history_insert ON public.call_history FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY call_history_update ON public.call_history FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY call_history_delete ON public.call_history FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Contacts
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
@@ -90,9 +90,9 @@ DROP POLICY IF EXISTS contacts_insert ON public.contacts;
 DROP POLICY IF EXISTS contacts_update ON public.contacts;
 DROP POLICY IF EXISTS contacts_delete ON public.contacts;
 CREATE POLICY contacts_read   ON public.contacts FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contacts_insert ON public.contacts FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY contacts_update ON public.contacts FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contacts_delete ON public.contacts FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY contacts_insert ON public.contacts FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contacts_update ON public.contacts FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contacts_delete ON public.contacts FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Contacts intake (shared like other user-owned data)
 ALTER TABLE public.contacts_intake ENABLE ROW LEVEL SECURITY;
@@ -102,9 +102,9 @@ DROP POLICY IF EXISTS contacts_intake_insert ON public.contacts_intake;
 DROP POLICY IF EXISTS contacts_intake_update ON public.contacts_intake;
 DROP POLICY IF EXISTS contacts_intake_delete ON public.contacts_intake;
 CREATE POLICY contacts_intake_read   ON public.contacts_intake FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contacts_intake_insert ON public.contacts_intake FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY contacts_intake_update ON public.contacts_intake FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY contacts_intake_delete ON public.contacts_intake FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY contacts_intake_insert ON public.contacts_intake FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contacts_intake_update ON public.contacts_intake FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY contacts_intake_delete ON public.contacts_intake FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- Knowledge base articles
 ALTER TABLE public.knowledge_base_articles ENABLE ROW LEVEL SECURITY;
@@ -114,9 +114,9 @@ DROP POLICY IF EXISTS kba_insert ON public.knowledge_base_articles;
 DROP POLICY IF EXISTS kba_update ON public.knowledge_base_articles;
 DROP POLICY IF EXISTS kba_delete ON public.knowledge_base_articles;
 CREATE POLICY kba_read   ON public.knowledge_base_articles FOR SELECT USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY kba_insert ON public.knowledge_base_articles FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY kba_update ON public.knowledge_base_articles FOR UPDATE USING (public.is_owner_or_collaborator(user_id, FALSE));
-CREATE POLICY kba_delete ON public.knowledge_base_articles FOR DELETE USING (public.is_owner_or_collaborator(user_id, FALSE));
+CREATE POLICY kba_insert ON public.knowledge_base_articles FOR INSERT WITH CHECK (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY kba_update ON public.knowledge_base_articles FOR UPDATE USING (public.is_owner_or_collaborator(user_id, TRUE));
+CREATE POLICY kba_delete ON public.knowledge_base_articles FOR DELETE USING (public.is_owner_or_collaborator(user_id, TRUE));
 
 -- User login logs: allow self, and owners to see collaborator logs
 ALTER TABLE public.user_login_logs ENABLE ROW LEVEL SECURITY;

@@ -42,6 +42,9 @@ import {
 } from "@/components/ui/tabs"
 import { Card } from "@/components/ui/card"
 
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+
 import { type BatchSummary, type ListParams } from "@/lib/api/batches"
 import { createClient } from "@/lib/supabase/client"
 
@@ -88,6 +91,20 @@ function fmtDate(iso?: string) {
   } catch {
     return iso
   }
+}
+
+// Looser "acceptable" phone check for red-flagging only (not enforced).
+// Acceptable (but not enforced for dispatch): +countrycode followed by at least 9 digits (total 10+ digits).
+const CC_PLUS_9_REGEX = /^\+\d{10,}$/
+
+// Basic loose normalization: strip separators, 00->+, add + if only digits and length >= 10.
+// We DO NOT enforce validity here; red flags are purely visual and nothing is suppressed.
+function normalizeLoosePhone(raw: string): string {
+  let s = (raw || "").trim()
+  s = s.replace(/[\s\-().]/g, "")
+  if (s.startsWith("00")) s = "+" + s.slice(2)
+  if (!s.startsWith("+") && /^\d{10,}$/.test(s)) s = "+" + s
+  return s
 }
 
 /* ===========================
@@ -478,11 +495,13 @@ export function BatchesTable({
   onView,
   onToggleStatus,
   onDelete,
+  onCallBatch,
 }: {
   items: BatchSummary[]
   onView: (id: string) => void
   onToggleStatus: (row: BatchSummary) => Promise<void>
   onDelete: (row: BatchSummary) => Promise<void>
+  onCallBatch: (row: BatchSummary) => Promise<void>
 }) {
   return (
     <Table className="min-w-[720px]">
@@ -537,6 +556,9 @@ export function BatchesTable({
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onClick={() => onView(row.id)}>
                     View details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onCallBatch(row)}>
+                    Call batch
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onToggleStatus(row)}>
                     {row.status === "paused" ? "Resume" : "Pause"}
@@ -677,7 +699,7 @@ export function BatchesListClient() {
       row.status === "paused" ? "running" : row.status === "running" ? "paused" : row.status
 
     // UI-only toggle to avoid backend schema changes
-    setRows((prev) =>
+   setRows((prev) =>
       (prev ?? []).map((r) =>
         r.id === row.id ? { ...r, status: nextStatus } : r
       )
@@ -701,6 +723,36 @@ export function BatchesListClient() {
       setTotal((t) => Math.max(0, t - 1))
     } catch (err) {
       console.error("Delete failed", err)
+    }
+  }, [])
+
+  const onCallBatch = React.useCallback(async (row: BatchSummary) => {
+    try {
+      let totalEnqueued = 0
+      let totalErrored = 0
+      const maxLoops = 1000
+      for (let i = 0; i < maxLoops; i++) {
+        const res = await fetch("/api/scheduling/call/dispatch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: row.id }),
+        })
+        let j: any = {}
+        try {
+          j = await res.json()
+        } catch {}
+        if (!res.ok) throw new Error(j?.error || `Failed (${res.status})`)
+        const enq = Number(j?.totals?.enqueued ?? 0)
+        const err = Number(j?.totals?.errored ?? 0)
+        totalEnqueued += enq
+        totalErrored += err
+        if (enq === 0) break
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      alert(`Call batch completed. Enqueued=${totalEnqueued}, Failed=${totalErrored}`)
+      setNonce((n) => n + 1)
+    } catch (e: any) {
+      alert(e?.message || "Failed to call batch")
     }
   }, [])
 
@@ -773,6 +825,7 @@ export function BatchesListClient() {
               onView={onView}
               onToggleStatus={onToggleStatus}
               onDelete={onDelete}
+              onCallBatch={onCallBatch}
             />
           </div>
         )}
@@ -793,6 +846,18 @@ export function BatchDetailClient({ id }: { id: string }) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [activeTab, setActiveTab] = React.useState("overview")
+
+  // Manage Contacts (CSV import + Quick Add)
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const [importing, setImporting] = React.useState(false)
+  const [importProgress, setImportProgress] = React.useState<{ processed: number; total: number } | null>(null)
+
+  const [qaName, setQaName] = React.useState("")
+  const [qaEmail, setQaEmail] = React.useState("")
+  const [qaPhone, setQaPhone] = React.useState("")
+  const [qaNotes, setQaNotes] = React.useState("")
+  const [qaSaving, setQaSaving] = React.useState(false)
+  const qaFlagged = qaPhone.trim() !== "" && !CC_PLUS_9_REGEX.test(normalizeLoosePhone(qaPhone))
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -845,6 +910,226 @@ export function BatchDetailClient({ id }: { id: string }) {
     // UI-only toggle to avoid backend schema changes
     setRow((prev) => (prev ? { ...prev, status: nextStatus } : prev))
   }, [row])
+
+  // Start Call Batch (loop until backend returns enqueued=0)
+  const onStartCallBatch = React.useCallback(async () => {
+    if (!row) return
+    try {
+      let totalEnqueued = 0
+      let totalErrored = 0
+      const maxLoops = 1000 // safety guard
+      for (let i = 0; i < maxLoops; i++) {
+        const res = await fetch("/api/scheduling/call/dispatch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: row.id }),
+        })
+        const j = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(j?.error || `Failed (${res.status})`)
+        const enq = Number(j?.totals?.enqueued ?? 0)
+        const err = Number(j?.totals?.errored ?? 0)
+        totalEnqueued += enq
+        totalErrored += err
+        if (enq === 0) break
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      alert(`Call batch completed. Enqueued=${totalEnqueued}, Failed=${totalErrored}`)
+      await load()
+    } catch (e: any) {
+      alert(e?.message || "Failed to call batch")
+    }
+  }, [row, load])
+
+  // CSV parser (accepts anything; light sanitization; no skipping by format)
+  const parseCSV = (text: string): { rows: { phone: string; notes: string }[] } => {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (lines.length === 0) return { rows: [] }
+    const hasHeader = /(^|,)\s*(contact|phone|number)\s*(,|$)/i.test(lines[0])
+    const entries = hasHeader ? lines.slice(1) : lines
+    const rows: { phone: string; notes: string }[] = []
+    for (const line of entries) {
+      const parts = line.split(",")
+      const rawPhone = (parts[0] || "").trim()
+      if (!rawPhone) continue
+      const notes = (parts[1] || "").trim()
+      rows.push({ phone: normalizeLoosePhone(rawPhone), notes })
+    }
+    return { rows }
+  }
+
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const res: T[][] = []
+    for (let i = 0; i < arr.length; i += size) res.push(arr.slice(i, i + size))
+    return res
+  }
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!row) return
+    const file = e.target.files?.[0]
+    e.target.value = "" // reset for next time
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const parsed = parseCSV(text)
+      const uniqueByPhone = Array.from(new Map(parsed.rows.map((r) => [r.phone, r])).values())
+      if (uniqueByPhone.length === 0) {
+        alert("No contacts found in CSV.")
+        return
+      }
+
+      setImporting(true)
+      setImportProgress({ processed: 0, total: uniqueByPhone.length })
+
+      const supabase = createClient()
+      const { data: auth } = await (supabase as any).auth.getUser?.()
+      const userId = (auth?.user?.id as string) || null
+      if (!userId) throw new Error("Not authenticated")
+
+      const CHUNK_SIZE = 500
+      const chunks = chunk(uniqueByPhone, CHUNK_SIZE)
+      let totalInserted = 0
+      let allowedRemaining = Math.max(0, 1000 - (row.itemsTotal || 0))
+      if (allowedRemaining === 0) {
+        alert("This batch already has 1000 contacts.")
+        return
+      }
+
+      for (let i = 0; i < chunks.length && allowedRemaining > 0; i++) {
+        const c = chunks[i].slice(0, allowedRemaining)
+
+        const contactRows = c.map((r) => ({
+          user_id: userId,
+          name: null as string | null,
+          email: null as string | null,
+          phone: r.phone,
+          notes: r.notes || null,
+        }))
+
+        const { data: inserted, error: insErr } = await supabase
+          .from("contacts")
+          .insert(contactRows)
+          .select("id")
+
+        if (insErr) {
+          console.error("Failed inserting contacts chunk:", insErr)
+          alert("Failed to import some contacts. See console for details.")
+          break
+        }
+
+        const linkRows = (inserted || []).map((rowIns: any, idx: number) => ({
+          batch_id: id,
+          contact_id: rowIns.id,
+          name: null as string | null,
+          email: null as string | null,
+          phone: c[idx]?.phone || null,
+          notes: c[idx]?.notes || null,
+        }))
+
+        if (linkRows.length > 0) {
+          const { error: linkErr } = await supabase.from("batch_contacts").insert(linkRows)
+          if (linkErr) {
+            console.error("Failed linking batch contacts:", linkErr)
+            alert("Failed to link some contacts to batch. See console for details.")
+            break
+          }
+        }
+
+       totalInserted += contactRows.length
+       setImportProgress({ processed: Math.min(totalInserted, uniqueByPhone.length), total: uniqueByPhone.length })
+       allowedRemaining -= contactRows.length
+      }
+
+      if (totalInserted > 0) {
+        // Refresh live count from snapshot table
+        const supabase2 = createClient()
+        const live = await countContactsForBatch(supabase2, id)
+        setRow((prev) =>
+          prev
+            ? {
+                ...prev,
+                itemsTotal: live,
+                progressPct:
+                  (prev.itemsProcessed || 0) > 0 && live > 0
+                    ? Math.min(100, Math.round(((prev.itemsProcessed || 0) / live) * 100))
+                    : 0,
+              }
+            : prev
+        )
+      }
+    } catch (err) {
+      console.error("Failed to import CSV:", err)
+      alert("Failed to import CSV.")
+    } finally {
+      setImporting(false)
+      setImportProgress(null)
+    }
+  }
+
+  const quickAdd = async () => {
+    if (!id) return
+    setQaSaving(true)
+    try {
+      const supabase = createClient()
+      const { data: auth } = await (supabase as any).auth.getUser?.()
+      const userId = (auth?.user?.id as string) || null
+      if (!userId) throw new Error("Not authenticated")
+
+      const normalized = normalizeLoosePhone(qaPhone)
+
+      const { data: contactRow, error: contactErr } = await supabase
+        .from("contacts")
+        .insert({
+          user_id: userId,
+          name: qaName.trim() || null,
+          email: qaEmail.trim() || null,
+          phone: normalized || qaPhone.trim(),
+          notes: qaNotes.trim() || null,
+        })
+        .select("id")
+        .single()
+
+      if (contactErr || !contactRow) throw contactErr || new Error("Failed to insert contact")
+
+      const { error: snapshotErr } = await supabase
+        .from("batch_contacts")
+        .insert({
+          batch_id: id,
+          contact_id: (contactRow as any).id,
+          name: qaName.trim() || null,
+          email: qaEmail.trim() || null,
+          phone: normalized || qaPhone.trim(),
+          notes: qaNotes.trim() || null,
+        })
+
+      if (snapshotErr) throw snapshotErr
+
+      // Refresh live count from snapshot table
+      const live = await countContactsForBatch(supabase, id)
+      setRow((prev) =>
+        prev
+          ? {
+              ...prev,
+              itemsTotal: live,
+              progressPct:
+                (prev.itemsProcessed || 0) > 0 && live > 0
+                  ? Math.min(100, Math.round(((prev.itemsProcessed || 0) / live) * 100))
+                  : 0,
+            }
+          : prev
+      )
+
+      setQaName("")
+      setQaEmail("")
+      setQaPhone("")
+      setQaNotes("")
+    } catch (e) {
+      console.error(e)
+      alert("Failed to add contact")
+    } finally {
+      setQaSaving(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -900,6 +1185,9 @@ export function BatchDetailClient({ id }: { id: string }) {
           <Button variant="outline" asChild>
             <Link href={`/batches/${encodeURIComponent(row.id)}/edit`}>Edit</Link>
           </Button>
+          <Button className="bg-neutral-900 text-white hover:bg-neutral-900/90" onClick={onStartCallBatch}>
+            Start Call Batch
+          </Button>
         </div>
       </div>
 
@@ -924,6 +1212,49 @@ export function BatchDetailClient({ id }: { id: string }) {
               <span className="text-xs tabular-nums">{row.progressPct}%</span>
             </div>
           </div>
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="font-medium">Manage Contacts</div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+              {importing && importProgress ? `Importing ${importProgress.processed}/${importProgress.total}` : "Import CSV"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="qa-name">Name (optional)</Label>
+            <Input id="qa-name" value={qaName} onChange={(e: any) => setQaName(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="qa-email">Email (optional)</Label>
+            <Input id="qa-email" type="email" value={qaEmail} onChange={(e: any) => setQaEmail(e.target.value)} />
+          </div>
+          <div className="md:col-span-2">
+            <Label htmlFor="qa-phone">Phone</Label>
+            <Input id="qa-phone" placeholder="e.g., +256778825312" value={qaPhone} onChange={(e: any) => setQaPhone(e.target.value)} />
+            {qaFlagged && <div className="text-xs text-red-600 mt-1">This number format is flagged but will still be sent.</div>}
+          </div>
+          <div className="md:col-span-2">
+            <Label htmlFor="qa-notes">Notes (optional)</Label>
+            <Textarea id="qa-notes" rows={3} value={qaNotes} onChange={(e: any) => setQaNotes(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={quickAdd} disabled={qaSaving} className="bg-neutral-900 text-white hover:bg-neutral-900/90">
+            {qaSaving ? "Adding..." : "Add to Batch"}
+          </Button>
         </div>
       </Card>
 

@@ -64,6 +64,45 @@ function toUtcFromKampala(local: string): string | undefined {
   return d.toISOString()
 }
 
+// Helpers to format and compute Africa/Kampala (UTC+3) local strings
+function fmtYMDHM(y: number, m: number, d: number, hh: number, mm: number) {
+  return `${y}-${pad2(m)}-${pad2(d)}T${pad2(hh)}:${pad2(mm)}`
+}
+
+function eatNowComponents() {
+  const eatNow = new Date(Date.now() + 3 * 60 * 60 * 1000)
+  return {
+    y: eatNow.getUTCFullYear(),
+    m: eatNow.getUTCMonth() + 1,
+    d: eatNow.getUTCDate(),
+    hh: eatNow.getUTCHours(),
+    mm: eatNow.getUTCMinutes(),
+  }
+}
+
+export function presetNowWindow(): { earliest: string; latest: string } {
+  const { y, m, d, hh, mm } = eatNowComponents()
+  const earliest = fmtYMDHM(y, m, d, hh, mm)
+  // +6 hours window by default
+  const end = new Date(Date.UTC(y, m - 1, d, hh, mm))
+  end.setUTCHours(end.getUTCHours() + 6)
+  const latest = fmtYMDHM(end.getUTCFullYear(), end.getUTCMonth() + 1, end.getUTCDate(), end.getUTCHours(), end.getUTCMinutes())
+  return { earliest, latest }
+}
+
+export function presetTodayBusiness(): { earliest: string; latest: string } {
+  const { y, m, d } = eatNowComponents()
+  return { earliest: fmtYMDHM(y, m, d, 9, 0), latest: fmtYMDHM(y, m, d, 21, 0) }
+}
+
+export function presetTomorrowBusiness(): { earliest: string; latest: string } {
+  const { y, m, d } = eatNowComponents()
+  const base = new Date(Date.UTC(y, m - 1, d, 0, 0))
+  base.setUTCDate(base.getUTCDate() + 1)
+  const yy = base.getUTCFullYear(), mm = base.getUTCMonth() + 1, dd = base.getUTCDate()
+  return { earliest: fmtYMDHM(yy, mm, dd, 9, 0), latest: fmtYMDHM(yy, mm, dd, 21, 0) }
+}
+
 // Live count helper: prefer snapshot table over possibly stale counters.
 async function countContactsForBatch(supabase: ReturnType<typeof createClient>, batchId: string): Promise<number> {
   // Use a tiny range with count: 'exact' so Supabase returns Content-Range count reliably.
@@ -518,6 +557,11 @@ export default function SchedulingPage() {
     try {
       const earliestUtc = toUtcFromKampala(earliestAt)
       const latestUtc = toUtcFromKampala(latestAt)
+      if (earliestAt && !earliestUtc) throw new Error("Invalid 'Earliest At' format. Use YYYY-MM-DDTHH:mm (Kampala time).")
+      if (latestAt && !latestUtc) throw new Error("Invalid 'Latest At' format. Use YYYY-MM-DDTHH:mm (Kampala time).")
+      if (earliestUtc && latestUtc) {
+        const e = new Date(earliestUtc).getTime(); const l = new Date(latestUtc).getTime(); if (e > l) throw new Error("Earliest time must be before Latest time.")
+      }
       const plan = (earliestUtc || latestUtc) ? { earliestAt: earliestUtc, latestAt: latestUtc } : undefined
       const res = await fetch("/api/scheduling/call/dispatch", {
         method: "POST",
@@ -568,7 +612,7 @@ export default function SchedulingPage() {
           <div>
             <h1 className="text-3xl font-bold text-black">Call Scheduling</h1>
             <p className="text-gray-600 mt-2">
-              Manage contact batches and start call scheduling sessions. Transport rows auto-expire after 24 hours.
+              Create Vapi outbound call campaigns. Choose your calling window in Kampala time; contacts are sent in campaigns of up to 500 automatically.
             </p>
           </div>
           <div className="flex gap-4">
@@ -606,11 +650,7 @@ export default function SchedulingPage() {
           </div>
         </div>
 
-        {callReady === false && (
-          <div className="mb-4 p-3 border border-yellow-300 bg-yellow-50 text-yellow-800 rounded">
-            Call scheduling tables are not ready. You can still run "Start Call Batch" (fallback storage), but Full Batch is disabled until you run scripts/simple_auth/015_call_scheduling.sql.
-          </div>
-        )}
+        {/* Provider readiness handled server-side; no legacy transport warnings */}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left: Batches/Contacts */}
@@ -766,6 +806,15 @@ export default function SchedulingPage() {
                         </div>
                         <div className="text-xs text-gray-500">
                           Timezone: Africa/Kampala (UTC+3). Values are converted to UTC before sending. Leave blank to use the provider default window.
+                        </div>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetNowWindow(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Start Now (next 6h)</Button>
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetTodayBusiness(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Today 09:00–21:00</Button>
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetTomorrowBusiness(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Tomorrow 09:00–21:00</Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setEarliestAt(""); setLatestAt(""); }}>Clear</Button>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {(() => { const n = batchMap.get(selectedBatch!)?.contact_count ?? 0; const c = n > 0 ? Math.ceil(n / 500) : 0; return `Batch size: ${n}. Will create about ${c || 1} campaign${(c || 1) > 1 ? 's' : ''} (max 500 contacts each).`; })()}
                         </div>
                       </div>
                     </div>

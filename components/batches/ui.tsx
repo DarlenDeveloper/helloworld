@@ -91,6 +91,41 @@ function fmtDate(iso?: string) {
 }
 
 /* ===========================
+   Data helpers (Supabase)
+   =========================== */
+
+type SupabaseClientLike = ReturnType<typeof createClient>
+
+/** Count snapshot contacts for a batch from batch_contacts to avoid stale contact_count */
+async function countContactsForBatch(supabase: SupabaseClientLike, batchId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("batch_contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("batch_id", batchId)
+  if (error) {
+    console.error("countContactsForBatch error", error)
+    return 0
+  }
+  return Number(count ?? 0)
+}
+
+/** Get last session totals.enqueued for a batch (used for progress) */
+async function getLastSessionEnqueued(supabase: SupabaseClientLike, batchId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("call_scheduling_sessions")
+    .select("totals,created_at")
+    .eq("batch_id", batchId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+  if (error) {
+    console.error("getLastSessionEnqueued error", error)
+    return 0
+  }
+  const totals = (data?.[0]?.totals || {}) as any
+  return Number(totals?.enqueued ?? 0)
+}
+
+/* ===========================
    Status Badge
    =========================== */
 
@@ -584,19 +619,34 @@ export function BatchesListClient() {
       const start = (page - 1) * pageSize
       const paged = arr.slice(start, start + pageSize)
 
-      const mapped = paged.map((b: any) => ({
-        id: String(b.id),
-        name: String(b.name ?? `Batch ${String(b.id).slice(0, 8)}`),
-        type: "call",
-        status: "queued",
-        createdAt: b.created_at,
-        itemsTotal: Number(b.contact_count ?? 0),
-        itemsProcessed: 0,
-        progressPct: 0,
-        raw: b,
-      })) as BatchSummary[]
+      // Enrich each batch with live contact count and last enqueued for progress
+      const ids = paged.map((b: any) => String(b.id))
+      const enriched = await Promise.all(
+        paged.map(async (b: any) => {
+          const id = String(b.id)
+          // Prefer live count from batch_contacts; fall back to stored contact_count
+          const liveCount = await countContactsForBatch(supabase, id)
+          const itemsTotal = liveCount > 0 ? liveCount : Number(b.contact_count ?? 0)
+          const enqueued = await getLastSessionEnqueued(supabase, id)
+          const progressPct =
+            itemsTotal > 0 ? Math.min(100, Math.round((enqueued / itemsTotal) * 100)) : 0
 
-      setRows(mapped)
+          const row: BatchSummary = {
+            id,
+            name: String(b.name ?? `Batch ${id.slice(0, 8)}`),
+            type: "call",
+            status: "queued",
+            createdAt: b.created_at,
+            itemsTotal,
+            itemsProcessed: enqueued,
+            progressPct,
+            raw: b,
+          }
+          return row
+        })
+      )
+
+      setRows(enriched)
       setTotal(totalCount)
     } catch (e: any) {
       setError(e?.message || "Failed to load batches")
@@ -757,15 +807,21 @@ export function BatchDetailClient({ id }: { id: string }) {
       if (error || !data) throw error || new Error("Not found")
 
       const b: any = data
+      const batchId = String(b.id)
+      const itemsTotal = await countContactsForBatch(supabase, batchId)
+      const enqueued = await getLastSessionEnqueued(supabase, batchId)
+      const progressPct =
+        itemsTotal > 0 ? Math.min(100, Math.round((enqueued / itemsTotal) * 100)) : 0
+
       const mapped: BatchSummary = {
-        id: String(b.id),
-        name: String(b.name ?? `Batch ${String(b.id).slice(0, 8)}`),
+        id: batchId,
+        name: String(b.name ?? `Batch ${batchId.slice(0, 8)}`),
         type: "call",
         status: "queued",
         createdAt: b.created_at,
-        itemsTotal: Number(b.contact_count ?? 0),
-        itemsProcessed: 0,
-        progressPct: 0,
+        itemsTotal,
+        itemsProcessed: enqueued,
+        progressPct,
         raw: b,
       }
       setRow(mapped)

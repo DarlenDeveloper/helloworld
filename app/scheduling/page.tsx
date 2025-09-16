@@ -40,6 +40,21 @@ function normalizeLoosePhone(raw: string): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Live count helper: prefer snapshot table over possibly stale counters.
+async function countContactsForBatch(supabase: ReturnType<typeof createClient>, batchId: string): Promise<number> {
+  // Use a tiny range with count: 'exact' so Supabase returns Content-Range count reliably.
+  const { count, error } = await supabase
+    .from("batch_contacts")
+    .select("id", { count: "exact" })
+    .eq("batch_id", batchId)
+    .range(0, 0) // fetch no real data, just headers (count)
+  if (error) {
+    console.error("countContactsForBatch error:", error)
+    return 0
+  }
+  return Number(count ?? 0)
+}
+
 interface DbContactBatch {
   id: string
   user_id: string
@@ -151,7 +166,17 @@ export default function SchedulingPage() {
       console.error("Error fetching contact batches:", error)
       return
     }
-    setContactBatches(data || [])
+
+    // Overlay live counts per batch from snapshot table
+    const rows = Array.isArray(data) ? data : []
+    const withCounts: DbContactBatch[] = await Promise.all(
+      rows.map(async (b: any) => {
+        const live = await countContactsForBatch(supabase, b.id)
+        // Prefer live count when available
+        return { ...b, contact_count: live > 0 ? live : Number(b.contact_count ?? 0) } as DbContactBatch
+      })
+    )
+    setContactBatches(withCounts)
   }
 
   const fetchBatchContacts = async (batchId: string) => {
@@ -287,10 +312,8 @@ export default function SchedulingPage() {
           .update({ contact_count: (batchMap.get(selectedBatch)?.contact_count || 0) + totalInserted })
           .eq("id", selectedBatch)
 
-        // Refresh batch in memory
-        setContactBatches((prev) =>
-          prev.map((b) => (b.id === selectedBatch ? { ...b, contact_count: b.contact_count + totalInserted } : b))
-        )
+        // Refresh batch in memory with live recount to avoid drift
+        await fetchBatches(user.id)
         await fetchBatchContacts(selectedBatch)
       }
     } catch (err) {

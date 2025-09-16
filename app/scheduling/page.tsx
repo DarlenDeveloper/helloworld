@@ -40,6 +40,30 @@ function normalizeLoosePhone(raw: string): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Convert a local datetime string (assumed Africa/Kampala, UTC+3) to UTC ISO8601 Z string
+function toUtcFromKampala(local: string): string | undefined {
+  const s = (local || "").trim()
+  if (!s) return undefined
+  // If already includes timezone or Z, trust it and normalize to ISO
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) {
+    const d = new Date(s)
+    if (isNaN(d.getTime())) return undefined
+    return d.toISOString()
+  }
+  // Expect formats like YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return undefined
+  const year = Number(m[1])
+  const month = Number(m[2]) - 1
+  const day = Number(m[3])
+  const hour = Number(m[4])
+  const minute = Number(m[5])
+  const second = Number(m[6] || "0")
+  // Kampala is UTC+3, so UTC = local - 3 hours
+  const d = new Date(Date.UTC(year, month, day, hour - 3, minute, second))
+  return d.toISOString()
+}
+
 // Live count helper: prefer snapshot table over possibly stale counters.
 async function countContactsForBatch(supabase: ReturnType<typeof createClient>, batchId: string): Promise<number> {
   // Use a tiny range with count: 'exact' so Supabase returns Content-Range count reliably.
@@ -110,6 +134,8 @@ export default function SchedulingPage() {
   const [lastSession, setLastSession] = useState<CallSession | null>(null)
   const [recentLogs, setRecentLogs] = useState<CallLog[]>([])
   const [callReady, setCallReady] = useState<boolean | null>(null)
+  const [earliestAt, setEarliestAt] = useState<string>("")
+  const [latestAt, setLatestAt] = useState<string>("")
   // Logs pagination state
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsHasMore, setLogsHasMore] = useState(false)
@@ -490,29 +516,21 @@ export default function SchedulingPage() {
     }
     setStarting(true)
     try {
-      // Run repeated sessions until no more contacts are enqueued by backend.
-      let totalEnqueued = 0
-      let totalErrored = 0
-      const maxLoops = 1000 // safety guard
-      for (let i = 0; i < maxLoops; i++) {
-        const res = await fetch("/api/scheduling/call/dispatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch_id: selectedBatch }),
-        })
-        const j = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(j?.error || `Failed to start call batch (${res.status})`)
-        const enq = Number(j?.totals?.enqueued ?? 0)
-        const err = Number(j?.totals?.errored ?? 0)
-        totalEnqueued += enq
-        totalErrored += err
-        await refreshPanel()
-        if (enq === 0) break
-        await sleep(500)
-      }
-      alert(`Call batch completed. Enqueued=${totalEnqueued}, Failed=${totalErrored}`)
+      const earliestUtc = toUtcFromKampala(earliestAt)
+      const latestUtc = toUtcFromKampala(latestAt)
+      const plan = (earliestUtc || latestUtc) ? { earliestAt: earliestUtc, latestAt: latestUtc } : undefined
+      const res = await fetch("/api/scheduling/call/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_id: selectedBatch, schedulePlan: plan }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(j?.error || `Failed to start Vapi campaign (${res.status})`)
+      const contacts = Number(j?.totals?.contacts ?? 0)
+      const campaigns = Number(j?.totals?.campaigns ?? (Array.isArray(j?.campaigns) ? j.campaigns.length : 0))
+      alert(`Created ${campaigns} campaign(s) for ${contacts} contact(s) via Vapi.`)
     } catch (e: any) {
-      alert(e?.message || "Failed to start call batch")
+      alert(e?.message || "Failed to start Vapi campaign(s)")
     } finally {
       setStarting(false)
     }
@@ -521,44 +539,7 @@ export default function SchedulingPage() {
   // Start sessions repeatedly (10 contacts per session) until batch is exhausted.
   // Disabled when callReady === false to avoid duplicate sends in fallback mode.
   const onStartFullBatch = async () => {
-    if (!selectedBatch) {
-      alert("Select a batch first")
-      return
-    }
-    if (callReady === false) {
-      alert("Call scheduling tables are not ready. Run scripts/simple_auth/015_call_scheduling.sql or use single-session Start Call Batch.")
-      return
-    }
-    setStarting(true)
-    try {
-      let totalEnqueued = 0
-      let totalErrored = 0
-      let cycles = 0
-      const estTotal = batchMap.get(selectedBatch)?.contact_count ?? 0
-      const maxSessions = Math.max(1, Math.ceil(estTotal / 10) + 5) // 10 per session + small buffer
-      while (cycles < maxSessions) {
-        const res = await fetch("/api/scheduling/call/dispatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch_id: selectedBatch }),
-        })
-        const j = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(j?.error || `Failed to run call batch (${res.status})`)
-        const enq = Number(j?.totals?.enqueued ?? 0)
-        const err = Number(j?.totals?.errored ?? 0)
-        totalEnqueued += enq
-        totalErrored += err
-        cycles += 1
-        await refreshPanel()
-        if (enq === 0) break
-        await sleep(1000)
-      }
-      alert(`Full batch scheduling completed. Total enqueued=${totalEnqueued}, Total failed=${totalErrored}`)
-    } catch (e: any) {
-      alert(e?.message || "Failed to start full batch")
-    } finally {
-      setStarting(false)
-    }
+    await onStartCallBatch()
   }
 
   useEffect(() => {
@@ -769,6 +750,23 @@ export default function SchedulingPage() {
                       <div className="text-sm">
                         <span className="font-medium">{batchMap.get(selectedBatch)?.name}</span>{" "}
                         <span className="text-gray-500">({batchMap.get(selectedBatch)?.contact_count ?? 0} contacts)</span>
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <div className="text-xs text-gray-500 mb-1">Schedule (UTC)</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="cs-earliest" className="w-28 text-xs text-gray-500">Earliest At</Label>
+                          <Input id="cs-earliest" placeholder="YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss" value={earliestAt} onChange={(e: any) => setEarliestAt(e.target.value)} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="cs-latest" className="w-28 text-xs text-gray-500">Latest At</Label>
+                          <Input id="cs-latest" placeholder="YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss" value={latestAt} onChange={(e: any) => setLatestAt(e.target.value)} />
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Timezone: Africa/Kampala (UTC+3). Values are converted to UTC before sending. Leave blank to use the provider default window.
+                        </div>
                       </div>
                     </div>
 

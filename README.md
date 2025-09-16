@@ -85,7 +85,7 @@ Visual Style Guide
 
 Component Library Outline (implemented or scaffolded)
 - List/Table, with optional card grid in follow-ups
-- Toolbar: search, status chips, sort, page size, New button
+- Toolbar: search, status chips, sort, size, New button
 - Pagination bar with accessible nav semantics
 - Status badge chips for queuing/running/paused/completed/failed
 - Action menu per row with confirmable destructive actions
@@ -215,3 +215,36 @@ Maintenance plan
 - Keep design tokens in `app/globals.css` aligned with brand updates.
 - Add Storybook in future to snapshot core components and states.
 - Guard new features behind flags and evolve without touching the backend.
+
+---
+
+## Outbound Calling via Vapi (Server-side Integration)
+
+This project integrates with Vapi to create outbound calling campaigns from the temporary call scheduling queue. The transport endpoint groups up to 500 contacts per campaign and can be invoked repeatedly to drain a batch.
+
+Required environment variables (server-side)
+- VAPI_API_KEY: Bearer token for Vapi API.
+- VAPI_PHONE_NUMBER_ID: Vapi phone number ID used for campaigns (caller ID).
+- Exactly one of the following to select the voice agent:
+  - VAPI_ASSISTANT_ID: Assistant ID to drive calls, or
+  - VAPI_WORKFLOW_ID: Workflow ID (mutually exclusive with VAPI_ASSISTANT_ID)
+- Optional scheduling window (ISO-8601, UTC):
+  - VAPI_SCHEDULE_EARLIEST_AT: e.g., 2025-01-15T09:00:00Z
+  - VAPI_SCHEDULE_LATEST_AT: e.g., 2025-01-15T21:00:00Z
+- Optional:
+  - VAPI_BASE_URL: defaults to https://api.vapi.ai
+
+Transport endpoint
+- POST `/api/scheduling/call/transport`
+  - Body: `{ batch_id: string, assistantId?: string, workflowId?: string, schedulePlan?: { earliestAt?: string; latestAt?: string } }`
+  - Behavior:
+    - Pulls up to 500 queued contacts for the authenticated owner and batch
+    - Builds Vapi `customers[]` from `call_scheduling_queue` rows (number/name/email/externalId)
+    - Creates one Vapi campaign per chunk (500 per campaign)
+    - Deletes only successfully submitted queue rows; logs a session-level event per created campaign
+
+Notes
+- You can call the transport endpoint multiple times to process all queued contacts for a batch in 500-sized campaigns.
+- Do not set both `VAPI_ASSISTANT_ID` and `VAPI_WORKFLOW_ID`. Provide exactly one.
+- Phone numbers should be in E.164 format; `numberE164CheckEnabled` is enabled in the generated customers payload.
+- Vapi Create Campaign reference: https://docs.vapi.ai/api-reference/campaigns/campaign-controller-create

@@ -79,6 +79,7 @@ export default function AnalyticsPage() {
       const startISO = new Date(start.getFullYear(), start.getMonth(), start.getDate()).toISOString()
       const endISO = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999).toISOString()
 
+      // Fetch call history data (kept for potential future use)
       const { data, error } = await supabase
         .from("call_history")
         .select("id,user_id,status,ai_summary,notes,call_date")
@@ -95,8 +96,6 @@ export default function AnalyticsPage() {
       } else {
         const rows = (data || []) as CallHistoryRow[]
         const days = getDaysArray(new Date(startISO), new Date(endISO))
-
-        // callsData will be computed from the calls table below to stay consistent
 
         // Status breakdown from calls table
         const { data: callsRows, error: callsErr } = await supabase
@@ -142,33 +141,66 @@ export default function AnalyticsPage() {
           setCallsData(newCallsData)
         }
 
-        // Talking points from summaries/notes
-        const text = rows
-          .map((r) => (r.ai_summary || r.notes || ""))
-          .join(" ")
-          .toLowerCase()
-        const tokens = text.match(/[a-zA-Z][a-zA-Z\-']{2,}/g) || []
-        const stop = new Set([
-          "the","and","for","you","with","that","this","from","have","your","are","was","were","but","not","they","their","them","our","out","had","has","all","can","will","would","could","should","about","there","what","when","where","how","why","which","been","also","into","more","less","call","calls","phone","number","agent","customer","client","email","address","hello","hi","thanks","thank","regarding","discuss","issue","issues","help","support"
-        ])
-        const freq = new Map<string, number>()
-        for (const t of tokens) {
-          if (stop.has(t)) continue
-          if (t.length < 4) continue
-          freq.set(t, (freq.get(t) || 0) + 1)
+        // Fetch talking points from talking_points_events table
+        const { data: talkingPointsEvents, error: talkingPointsErr } = await supabase
+          .from("talking_points_events")
+          .select("id,category_id,text,created_at")
+          .eq("user_id", user.id)
+          .gte("created_at", startISO)
+          .lte("created_at", endISO)
+          .order("created_at", { ascending: false })
+
+        if (talkingPointsErr) {
+          console.error("Talking points fetch error:", talkingPointsErr)
+          setTalkingPointsData([])
+        } else {
+          const talkingPointsRows = (talkingPointsEvents || []) as any[]
+          
+          if (talkingPointsRows.length === 0) {
+            setTalkingPointsData([])
+          } else {
+            // Count occurrences of each talking point text
+            const textFrequency = new Map<string, number>()
+            talkingPointsRows.forEach(event => {
+              if (event.text) {
+                const text = event.text.trim()
+                textFrequency.set(text, (textFrequency.get(text) || 0) + 1)
+              }
+            })
+
+            // Convert to array and sort by frequency
+            const sortedPoints = Array.from(textFrequency.entries())
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 6) // Take top 6 talking points
+
+            if (sortedPoints.length === 0) {
+              setTalkingPointsData([])
+            } else {
+              // Calculate total for percentage calculation
+              const total = sortedPoints.reduce((sum, [, count]) => sum + count, 0)
+              
+              // Define unique colors for each category
+              const colors = [
+                "#14b8a6", // teal
+                "#3b82f6", // blue
+                "#f59e0b", // amber
+                "#ef4444", // red
+                "#8b5cf6", // violet
+                "#06b6d4", // cyan
+              ]
+
+              // Create talking points with colors and percentages
+              const talking: TalkingPointDatum[] = sortedPoints.map(([text, count], index) => ({
+                name: text.charAt(0).toUpperCase() + text.slice(1).toLowerCase(),
+                value: Math.round((count / total) * 100),
+                color: colors[index % colors.length],
+                calls: count
+              }))
+
+              setTalkingPointsData(talking)
+            }
+          }
         }
-        const top = Array.from(freq.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 4)
-        const totalTop = top.reduce((s, [, n]) => s + n, 0) || 1
-        const palette = ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444"]
-        const talking: TalkingPointDatum[] = top.map(([name, count], i) => ({
-          name: name.replace(/\b\w/g, (c) => c.toUpperCase()),
-          value: Math.round((count / totalTop) * 100),
-          color: palette[i] || "#94a3b8",
-          calls: count,
-        }))
-        setTalkingPointsData(talking)
       }
 
       // subscribe for updates in window
@@ -178,6 +210,9 @@ export default function AnalyticsPage() {
           run()
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
+          run()
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "talking_points_events" }, () => {
           run()
         })
         .subscribe()
@@ -454,18 +489,22 @@ export default function AnalyticsPage() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="mt-4 space-y-2">
-                {talkingPointsData.map((item, index) => (
-                  <div key={index} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full`} style={{ backgroundColor: item.color }}></div>
-                      <span className="text-sm">{item.name}</span>
+                {talkingPointsData.length === 0 ? (
+                  <div className="text-gray-500 text-sm text-center py-4">Not enough data</div>
+                ) : (
+                  talkingPointsData.map((item, index) => (
+                    <div key={index} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full`} style={{ backgroundColor: item.color }}></div>
+                        <span className="text-sm">{item.name}</span>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-medium">{item.value}%</div>
+                        <div className="text-xs text-gray-500">{item.calls} mentions</div>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">{item.value}%</div>
-                      <div className="text-xs text-gray-500">{item.calls} mentions</div>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>

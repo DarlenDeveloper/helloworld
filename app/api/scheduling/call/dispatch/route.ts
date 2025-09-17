@@ -43,9 +43,9 @@ export async function GET() {
 
   const envs = requiredEnv()
   if (!envs.ok) {
-    return NextResponse.json({ ready: false, provider: "vapi", missing: envs.missing })
+    return NextResponse.json({ ready: false, provider: "airies", missing: envs.missing })
   }
-  return NextResponse.json({ ready: true, provider: "vapi" })
+  return NextResponse.json({ ready: true, provider: "airies" })
 }
 
 export async function POST(req: Request) {
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
   }
 
   if (snapshots.length === 0) {
-    return NextResponse.json({ success: true, provider: "vapi", campaigns: [], totals: { contacts: 0, campaigns: 0 } })
+    return NextResponse.json({ success: true, provider: "airies", campaigns: [], totals: { contacts: 0, campaigns: 0 } })
   }
 
   // Build customers (accept numbers as-is; enable E164 check in provider)
@@ -163,7 +163,7 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     success: true,
-    provider: "vapi",
+    provider: "airies",
     campaigns: created,
     totals: { contacts: customers.length, campaigns: created.length },
   })

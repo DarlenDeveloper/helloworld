@@ -218,13 +218,13 @@ Maintenance plan
 
 ---
 
-## Outbound Calling via Vapi (Server-side Integration)
+## Outbound Calling via Airies AI (Server-side Integration)
 
-This project integrates with Vapi to create outbound calling campaigns from the temporary call scheduling queue. The transport endpoint groups up to 500 contacts per campaign and can be invoked repeatedly to drain a batch.
+This project integrates with Airies AI (via our provider backend) to create outbound calling campaigns from the temporary call scheduling queue. The transport endpoint groups up to 500 contacts per campaign and can be invoked repeatedly to drain a batch.
 
 Required environment variables (server-side)
-- VAPI_API_KEY: Bearer token for Vapi API.
-- VAPI_PHONE_NUMBER_ID: Vapi phone number ID used for campaigns (caller ID).
+- VAPI_API_KEY: Bearer token for provider API.
+- VAPI_PHONE_NUMBER_ID: Provider phone number ID used for campaigns (caller ID).
 - Exactly one of the following to select the voice agent:
   - VAPI_ASSISTANT_ID: Assistant ID to drive calls, or
   - VAPI_WORKFLOW_ID: Workflow ID (mutually exclusive with VAPI_ASSISTANT_ID)
@@ -239,12 +239,12 @@ Transport endpoint
   - Body: `{ batch_id: string, assistantId?: string, workflowId?: string, schedulePlan?: { earliestAt?: string; latestAt?: string } }`
   - Behavior:
     - Pulls up to 500 queued contacts for the authenticated owner and batch
-    - Builds Vapi `customers[]` from `call_scheduling_queue` rows (number/name/email/externalId)
-    - Creates one Vapi campaign per chunk (500 per campaign)
+    - Builds provider `customers[]` from `call_scheduling_queue` rows (number/name/email/externalId)
+    - Creates one campaign per chunk (500 per campaign)
     - Deletes only successfully submitted queue rows; logs a session-level event per created campaign
 
 Notes
 - You can call the transport endpoint multiple times to process all queued contacts for a batch in 500-sized campaigns.
 - Do not set both `VAPI_ASSISTANT_ID` and `VAPI_WORKFLOW_ID`. Provide exactly one.
 - Phone numbers should be in E.164 format; `numberE164CheckEnabled` is enabled in the generated customers payload.
-- Vapi Create Campaign reference: https://docs.vapi.ai/api-reference/campaigns/campaign-controller-create
+- Provider Create Campaign reference: internal docs

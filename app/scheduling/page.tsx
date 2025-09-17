@@ -208,18 +208,7 @@ export default function SchedulingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router])
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/scheduling/call/dispatch", { method: "GET" })
-        const j = await res.json().catch(() => ({}))
-        setCallReady(res.ok ? Boolean(j?.ready) : false)
-      } catch {
-        setCallReady(false)
-      }
-    })()
-  }, [])
-
+  
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
       .from("contact_batches")
@@ -569,12 +558,12 @@ export default function SchedulingPage() {
         body: JSON.stringify({ batch_id: selectedBatch, schedulePlan: plan }),
       })
       const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j?.error || `Failed to start Vapi campaign (${res.status})`)
+      if (!res.ok) throw new Error(j?.error || `Failed to start campaign (${res.status})`)
       const contacts = Number(j?.totals?.contacts ?? 0)
       const campaigns = Number(j?.totals?.campaigns ?? (Array.isArray(j?.campaigns) ? j.campaigns.length : 0))
-      alert(`Created ${campaigns} campaign(s) for ${contacts} contact(s) via Vapi.`)
+      alert(`Created ${campaigns} campaign(s) for ${contacts} contact(s) via Airies AI.`)
     } catch (e: any) {
-      alert(e?.message || "Failed to start Vapi campaign(s)")
+      alert(e?.message || "Failed to start campaign(s)")
     } finally {
       setStarting(false)
     }
@@ -612,7 +601,7 @@ export default function SchedulingPage() {
           <div>
             <h1 className="text-3xl font-bold text-black">Call Scheduling</h1>
             <p className="text-gray-600 mt-2">
-              Create Vapi outbound call campaigns. Choose your calling window in Kampala time; contacts are sent in campaigns of up to 500 automatically.
+              Create outbound call campaigns. Choose your calling window in Kampala time; contacts are sent in campaigns of up to 500 automatically.
             </p>
           </div>
           <div className="flex gap-4">
@@ -641,8 +630,7 @@ export default function SchedulingPage() {
             <Button
               variant="outline"
               onClick={onStartFullBatch}
-              disabled={!selectedBatch || starting || callReady === false}
-              title={callReady === false ? "Tables not ready; run scripts/simple_auth/015_call_scheduling.sql" : ""}
+              disabled={!selectedBatch || starting}
             >
               <Play className="h-4 w-4 mr-2" />
               Start Full Batch
@@ -769,7 +757,7 @@ export default function SchedulingPage() {
           <div>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-black">Call Scheduling (24h Transport)</CardTitle>
+                <CardTitle className="text-black">Call Scheduling</CardTitle>
                 <Button variant="ghost" size="sm" onClick={refreshPanel} disabled={!selectedBatch}>
                   Refresh
                 </Button>

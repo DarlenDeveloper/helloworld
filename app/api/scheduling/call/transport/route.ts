@@ -115,7 +115,7 @@ export async function POST(req: Request) {
           owner_id,
           contact_id: null,
           action: "enqueued",
-          detail: { provider: "vapi", campaignId: resp.id, name: resp.name, count: customers.length, deleteError: delErr?.message },
+          detail: { provider: "airies", campaignId: resp.id, name: resp.name, count: customers.length, deleteError: delErr?.message },
         }])
       }
 
@@ -134,10 +134,10 @@ export async function POST(req: Request) {
           owner_id,
           contact_id: null,
           action: "failed",
-          detail: { provider: "vapi", error: String(e?.message || e), status: e?.status, raw: e?.raw },
+          detail: { provider: "airies", error: String(e?.message || e), status: e?.status, raw: e?.raw },
         }])
       }
-      return NextResponse.json({ success: false, error: e?.message || "Failed to create Vapi campaign" }, { status: 502 })
+      return NextResponse.json({ success: false, error: e?.message || "Failed to create campaign" }, { status: 502 })
     }
   }
 

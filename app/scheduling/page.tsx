@@ -40,6 +40,69 @@ function normalizeLoosePhone(raw: string): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Convert a local datetime string (assumed Africa/Kampala, UTC+3) to UTC ISO8601 Z string
+function toUtcFromKampala(local: string): string | undefined {
+  const s = (local || "").trim()
+  if (!s) return undefined
+  // If already includes timezone or Z, trust it and normalize to ISO
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) {
+    const d = new Date(s)
+    if (isNaN(d.getTime())) return undefined
+    return d.toISOString()
+  }
+  // Expect formats like YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return undefined
+  const year = Number(m[1])
+  const month = Number(m[2]) - 1
+  const day = Number(m[3])
+  const hour = Number(m[4])
+  const minute = Number(m[5])
+  const second = Number(m[6] || "0")
+  // Kampala is UTC+3, so UTC = local - 3 hours
+  const d = new Date(Date.UTC(year, month, day, hour - 3, minute, second))
+  return d.toISOString()
+}
+
+// Helpers to format and compute Africa/Kampala (UTC+3) local strings
+function fmtYMDHM(y: number, m: number, d: number, hh: number, mm: number) {
+  return `${y}-${pad2(m)}-${pad2(d)}T${pad2(hh)}:${pad2(mm)}`
+}
+
+function eatNowComponents() {
+  const eatNow = new Date(Date.now() + 3 * 60 * 60 * 1000)
+  return {
+    y: eatNow.getUTCFullYear(),
+    m: eatNow.getUTCMonth() + 1,
+    d: eatNow.getUTCDate(),
+    hh: eatNow.getUTCHours(),
+    mm: eatNow.getUTCMinutes(),
+  }
+}
+
+export function presetNowWindow(): { earliest: string; latest: string } {
+  const { y, m, d, hh, mm } = eatNowComponents()
+  const earliest = fmtYMDHM(y, m, d, hh, mm)
+  // +6 hours window by default
+  const end = new Date(Date.UTC(y, m - 1, d, hh, mm))
+  end.setUTCHours(end.getUTCHours() + 6)
+  const latest = fmtYMDHM(end.getUTCFullYear(), end.getUTCMonth() + 1, end.getUTCDate(), end.getUTCHours(), end.getUTCMinutes())
+  return { earliest, latest }
+}
+
+export function presetTodayBusiness(): { earliest: string; latest: string } {
+  const { y, m, d } = eatNowComponents()
+  return { earliest: fmtYMDHM(y, m, d, 9, 0), latest: fmtYMDHM(y, m, d, 21, 0) }
+}
+
+export function presetTomorrowBusiness(): { earliest: string; latest: string } {
+  const { y, m, d } = eatNowComponents()
+  const base = new Date(Date.UTC(y, m - 1, d, 0, 0))
+  base.setUTCDate(base.getUTCDate() + 1)
+  const yy = base.getUTCFullYear(), mm = base.getUTCMonth() + 1, dd = base.getUTCDate()
+  return { earliest: fmtYMDHM(yy, mm, dd, 9, 0), latest: fmtYMDHM(yy, mm, dd, 21, 0) }
+}
+
 // Live count helper: prefer snapshot table over possibly stale counters.
 async function countContactsForBatch(supabase: ReturnType<typeof createClient>, batchId: string): Promise<number> {
   // Use a tiny range with count: 'exact' so Supabase returns Content-Range count reliably.
@@ -110,6 +173,8 @@ export default function SchedulingPage() {
   const [lastSession, setLastSession] = useState<CallSession | null>(null)
   const [recentLogs, setRecentLogs] = useState<CallLog[]>([])
   const [callReady, setCallReady] = useState<boolean | null>(null)
+  const [earliestAt, setEarliestAt] = useState<string>("")
+  const [latestAt, setLatestAt] = useState<string>("")
   // Logs pagination state
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsHasMore, setLogsHasMore] = useState(false)
@@ -143,18 +208,7 @@ export default function SchedulingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, router])
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/scheduling/call/dispatch", { method: "GET" })
-        const j = await res.json().catch(() => ({}))
-        setCallReady(res.ok ? Boolean(j?.ready) : false)
-      } catch {
-        setCallReady(false)
-      }
-    })()
-  }, [])
-
+  
   const fetchBatches = async (userId: string) => {
     const { data, error } = await supabase
       .from("contact_batches")
@@ -490,29 +544,26 @@ export default function SchedulingPage() {
     }
     setStarting(true)
     try {
-      // Run repeated sessions until no more contacts are enqueued by backend.
-      let totalEnqueued = 0
-      let totalErrored = 0
-      const maxLoops = 1000 // safety guard
-      for (let i = 0; i < maxLoops; i++) {
-        const res = await fetch("/api/scheduling/call/dispatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch_id: selectedBatch }),
-        })
-        const j = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(j?.error || `Failed to start call batch (${res.status})`)
-        const enq = Number(j?.totals?.enqueued ?? 0)
-        const err = Number(j?.totals?.errored ?? 0)
-        totalEnqueued += enq
-        totalErrored += err
-        await refreshPanel()
-        if (enq === 0) break
-        await sleep(500)
+      const earliestUtc = toUtcFromKampala(earliestAt)
+      const latestUtc = toUtcFromKampala(latestAt)
+      if (earliestAt && !earliestUtc) throw new Error("Invalid 'Earliest At' format. Use YYYY-MM-DDTHH:mm (Kampala time).")
+      if (latestAt && !latestUtc) throw new Error("Invalid 'Latest At' format. Use YYYY-MM-DDTHH:mm (Kampala time).")
+      if (earliestUtc && latestUtc) {
+        const e = new Date(earliestUtc).getTime(); const l = new Date(latestUtc).getTime(); if (e > l) throw new Error("Earliest time must be before Latest time.")
       }
-      alert(`Call batch completed. Enqueued=${totalEnqueued}, Failed=${totalErrored}`)
+      const plan = (earliestUtc || latestUtc) ? { earliestAt: earliestUtc, latestAt: latestUtc } : undefined
+      const res = await fetch("/api/scheduling/call/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_id: selectedBatch, schedulePlan: plan }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(j?.error || `Failed to start campaign (${res.status})`)
+      const contacts = Number(j?.totals?.contacts ?? 0)
+      const campaigns = Number(j?.totals?.campaigns ?? (Array.isArray(j?.campaigns) ? j.campaigns.length : 0))
+      alert(`Created ${campaigns} campaign(s) for ${contacts} contact(s) via Airies AI.`)
     } catch (e: any) {
-      alert(e?.message || "Failed to start call batch")
+      alert(e?.message || "Failed to start campaign(s)")
     } finally {
       setStarting(false)
     }
@@ -521,44 +572,7 @@ export default function SchedulingPage() {
   // Start sessions repeatedly (10 contacts per session) until batch is exhausted.
   // Disabled when callReady === false to avoid duplicate sends in fallback mode.
   const onStartFullBatch = async () => {
-    if (!selectedBatch) {
-      alert("Select a batch first")
-      return
-    }
-    if (callReady === false) {
-      alert("Call scheduling tables are not ready. Run scripts/simple_auth/015_call_scheduling.sql or use single-session Start Call Batch.")
-      return
-    }
-    setStarting(true)
-    try {
-      let totalEnqueued = 0
-      let totalErrored = 0
-      let cycles = 0
-      const estTotal = batchMap.get(selectedBatch)?.contact_count ?? 0
-      const maxSessions = Math.max(1, Math.ceil(estTotal / 10) + 5) // 10 per session + small buffer
-      while (cycles < maxSessions) {
-        const res = await fetch("/api/scheduling/call/dispatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch_id: selectedBatch }),
-        })
-        const j = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(j?.error || `Failed to run call batch (${res.status})`)
-        const enq = Number(j?.totals?.enqueued ?? 0)
-        const err = Number(j?.totals?.errored ?? 0)
-        totalEnqueued += enq
-        totalErrored += err
-        cycles += 1
-        await refreshPanel()
-        if (enq === 0) break
-        await sleep(1000)
-      }
-      alert(`Full batch scheduling completed. Total enqueued=${totalEnqueued}, Total failed=${totalErrored}`)
-    } catch (e: any) {
-      alert(e?.message || "Failed to start full batch")
-    } finally {
-      setStarting(false)
-    }
+    await onStartCallBatch()
   }
 
   useEffect(() => {
@@ -587,7 +601,7 @@ export default function SchedulingPage() {
           <div>
             <h1 className="text-3xl font-bold text-black">Call Scheduling</h1>
             <p className="text-gray-600 mt-2">
-              Manage contact batches and start call scheduling sessions. Transport rows auto-expire after 24 hours.
+              Create outbound call campaigns. Choose your calling window in Kampala time; contacts are sent in campaigns of up to 500 automatically.
             </p>
           </div>
           <div className="flex gap-4">
@@ -616,8 +630,7 @@ export default function SchedulingPage() {
             <Button
               variant="outline"
               onClick={onStartFullBatch}
-              disabled={!selectedBatch || starting || callReady === false}
-              title={callReady === false ? "Tables not ready; run scripts/simple_auth/015_call_scheduling.sql" : ""}
+              disabled={!selectedBatch || starting}
             >
               <Play className="h-4 w-4 mr-2" />
               Start Full Batch
@@ -625,11 +638,7 @@ export default function SchedulingPage() {
           </div>
         </div>
 
-        {callReady === false && (
-          <div className="mb-4 p-3 border border-yellow-300 bg-yellow-50 text-yellow-800 rounded">
-            Call scheduling tables are not ready. You can still run "Start Call Batch" (fallback storage), but Full Batch is disabled until you run scripts/simple_auth/015_call_scheduling.sql.
-          </div>
-        )}
+        {/* Provider readiness handled server-side; no legacy transport warnings */}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left: Batches/Contacts */}
@@ -748,7 +757,7 @@ export default function SchedulingPage() {
           <div>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-black">Call Scheduling (24h Transport)</CardTitle>
+                <CardTitle className="text-black">Call Scheduling</CardTitle>
                 <Button variant="ghost" size="sm" onClick={refreshPanel} disabled={!selectedBatch}>
                   Refresh
                 </Button>
@@ -769,6 +778,32 @@ export default function SchedulingPage() {
                       <div className="text-sm">
                         <span className="font-medium">{batchMap.get(selectedBatch)?.name}</span>{" "}
                         <span className="text-gray-500">({batchMap.get(selectedBatch)?.contact_count ?? 0} contacts)</span>
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <div className="text-xs text-gray-500 mb-1">Schedule (UTC)</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="cs-earliest" className="w-28 text-xs text-gray-500">Earliest At</Label>
+                          <Input id="cs-earliest" placeholder="YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss" value={earliestAt} onChange={(e: any) => setEarliestAt(e.target.value)} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="cs-latest" className="w-28 text-xs text-gray-500">Latest At</Label>
+                          <Input id="cs-latest" placeholder="YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss" value={latestAt} onChange={(e: any) => setLatestAt(e.target.value)} />
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Timezone: Africa/Kampala (UTC+3). Values are converted to UTC before sending. Leave blank to use the provider default window.
+                        </div>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetNowWindow(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Start Now (next 6h)</Button>
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetTodayBusiness(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Today 09:00–21:00</Button>
+                          <Button variant="outline" size="sm" onClick={() => { const p = presetTomorrowBusiness(); setEarliestAt(p.earliest); setLatestAt(p.latest); }}>Tomorrow 09:00–21:00</Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setEarliestAt(""); setLatestAt(""); }}>Clear</Button>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {(() => { const n = batchMap.get(selectedBatch!)?.contact_count ?? 0; const c = n > 0 ? Math.ceil(n / 500) : 0; return `Batch size: ${n}. Will create about ${c || 1} campaign${(c || 1) > 1 ? 's' : ''} (max 500 contacts each).`; })()}
+                        </div>
                       </div>
                     </div>
 

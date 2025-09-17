@@ -392,8 +392,14 @@ export default function CallHistoryPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.dateTime}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{call.campaignName || "N/A"}</td>
                     <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
-                      <div className="truncate" title={call.summary}>
-                        {call.summary}
+                      <div className="relative group">
+                        <div className="truncate">{call.summary || "No summary available"}</div>
+                        {call.summary ? (
+                          <div className="absolute z-50 hidden group-hover:block bg-white border border-gray-200 shadow-lg rounded-md p-3 w-[32rem] max-w-[80vw] max-h-64 overflow-auto right-0 top-full mt-2">
+                            <div className="text-xs uppercase text-gray-500 mb-1">Call Summary</div>
+                            <div className="whitespace-pre-wrap text-sm text-gray-900">{call.summary}</div>
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

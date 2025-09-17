@@ -119,7 +119,7 @@ export default function Dashboard() {
     avgDuration: 0,
     avgChangePercent: 0
   })
-  const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string }[]>([])
+  const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string; hexColor?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const supabase = createClient()
@@ -211,7 +211,15 @@ export default function Dashboard() {
           .select("duration, cost, ai_summary, notes, call_date")
           .eq("user_id", userId)
           .order("call_date", { ascending: false })
-          .limit(500) // Limit for performance
+          .limit(500), // Limit for performance
+        
+        // Fetch talking points events data
+        supabase
+          .from("talking_points_events")
+          .select("id, category_id, text, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1000)
       ])
 
       // Handle calls data
@@ -236,7 +244,12 @@ export default function Dashboard() {
       if (results[3].status === 'fulfilled' && !results[3].value.error) {
         const historyData = results[3].value.data as CallHistory[] || []
         calculateCallMetrics(historyData)
-        calculateTalkingPoints(historyData)
+      }
+
+      // Handle talking points events
+      if (results[4].status === 'fulfilled' && !results[4].value.error) {
+        const talkingPointsData = results[4].value.data as any[] || []
+        calculateTalkingPointsFromEvents(talkingPointsData)
       }
 
       // Log any failed requests
@@ -291,36 +304,51 @@ export default function Dashboard() {
     })
   }
 
-  // Derive top talking points from call summaries/notes
-  const calculateTalkingPoints = (callHistoryData: CallHistory[]) => {
-    const text = callHistoryData
-      .map((c) => (c.ai_summary || c.notes || ""))
-      .join(" ")
-      .toLowerCase()
-
-    const tokens = text.match(/[a-zA-Z][a-zA-Z\-']{2,}/g) || []
-    const stop = new Set([
-      "the","and","for","you","with","that","this","from","have","your","are","was","were","but","not","they","their","them","our","out","had","has","all","can","will","would","could","should","about","there","what","when","where","how","why","which","been","also","into","more","less","call","calls","phone","number","agent","customer","client","email","address","hello","hi","thanks","thank","regarding","discuss","issue","issues","help","support"
-    ])
-
-    const freq = new Map<string, number>()
-    for (const t of tokens) {
-      if (stop.has(t)) continue
-      if (t.length < 4) continue
-      freq.set(t, (freq.get(t) || 0) + 1)
+  // Calculate talking points from talking_points_events table
+  const calculateTalkingPointsFromEvents = (talkingPointsEvents: any[]) => {
+    if (!talkingPointsEvents || talkingPointsEvents.length === 0) {
+      setTalkingPoints([])
+      return
     }
 
-    const top = Array.from(freq.entries())
+    // Count occurrences of each talking point text
+    const textFrequency = new Map<string, number>()
+    talkingPointsEvents.forEach(event => {
+      if (event.text) {
+        const text = event.text.trim()
+        textFrequency.set(text, (textFrequency.get(text) || 0) + 1)
+      }
+    })
+
+    // Convert to array and sort by frequency
+    const sortedPoints = Array.from(textFrequency.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
+      .slice(0, 6) // Take top 6 talking points
 
-    const totalTop = top.reduce((s, [, n]) => s + n, 0) || 1
-    const colors = ["bg-teal-500", "bg-blue-500", "bg-yellow-500", "bg-red-500"]
+    if (sortedPoints.length === 0) {
+      setTalkingPoints([])
+      return
+    }
 
-    const points = top.map(([label, n], i) => ({
-      label: label.replace(/\b\w/g, (c) => c.toUpperCase()),
-      percent: Math.round((n / totalTop) * 100),
-      color: colors[i] || "bg-gray-400",
+    // Calculate total for percentage calculation
+    const total = sortedPoints.reduce((sum, [, count]) => sum + count, 0)
+    
+    // Define unique colors for each category
+    const colors = [
+      "#14b8a6", // teal
+      "#3b82f6", // blue
+      "#f59e0b", // amber
+      "#ef4444", // red
+      "#8b5cf6", // violet
+      "#06b6d4", // cyan
+    ]
+
+    // Create talking points with colors and percentages
+    const points = sortedPoints.map(([text, count], index) => ({
+      label: text.charAt(0).toUpperCase() + text.slice(1).toLowerCase(),
+      percent: Math.round((count / total) * 100),
+      color: `bg-[${colors[index % colors.length]}]`, // Use arbitrary values for Tailwind
+      hexColor: colors[index % colors.length] // Store hex color for chart
     }))
 
     setTalkingPoints(points)
@@ -597,9 +625,9 @@ export default function Dashboard() {
                     cy="50%"
                     outerRadius={90}
                   >
-                    {talkingPoints.map((_, idx) => {
-                      const hexColors = ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444"]
-                      return <Cell key={idx} fill={hexColors[idx % hexColors.length]} />
+                    {talkingPoints.map((tp, idx) => {
+                      const hexColors = ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"]
+                      return <Cell key={idx} fill={tp.hexColor || hexColors[idx % hexColors.length]} />
                     })}
                   </Pie>
                 </PieChart>
@@ -611,7 +639,10 @@ export default function Dashboard() {
               ) : (
                 talkingPoints.map((tp, idx) => (
                   <div key={idx} className="flex items-center gap-2">
-                    <div className={`w-3 h-3 ${tp.color} rounded-full`}></div>
+                    <div
+                      className="w-3 h-3 rounded-full"
+                      style={{ backgroundColor: tp.hexColor || ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"][idx % 6] }}
+                    ></div>
                     <span>{tp.label} ({tp.percent}%)</span>
                   </div>
                 ))

@@ -36,7 +36,7 @@ export function Sidebar() {
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
     { icon: FormInput, href: "/forms/contact", label: "Web Forms", active: pathname === "/forms/contact" },
-    { icon: Users, href: "/collaborators", label: "Collaborators", active: pathname === "/collaborators" },
+    { icon: Users, href: "/users", label: "Users", active: pathname === "/users" },
     { icon: Bell, href: "/notifications", label: "Notifications", active: pathname === "/notifications" },
     { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
     { icon: DollarSign, href: "/billing", label: "Billing", active: pathname === "/billing" },

@@ -7,13 +7,23 @@ export async function GET() {
   const { data: { user }, error: uerr } = await supabase.auth.getUser()
   if (uerr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
+  // Source of truth is account_users (owner -> member). Map to legacy collaborator shape.
   const { data, error } = await supabase
-    .from("user_collaborators")
-    .select("*")
+    .from("account_users")
+    .select("id, owner_user_id, member_user_id, role, is_active, created_at")
     .eq("owner_user_id", user.id)
+    .eq("is_active", true)
     .order("created_at", { ascending: false })
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-  return NextResponse.json({ collaborators: data || [] })
+
+  const collaborators = (data || []).map((row: any) => ({
+    id: row.id,
+    owner_user_id: row.owner_user_id,
+    collaborator_user_id: row.member_user_id,
+    role: String(row.role || "user").toLowerCase() === "admin" ? "editor" : "viewer",
+    created_at: row.created_at,
+  }))
+  return NextResponse.json({ collaborators })
 }
 
 // Update collaborator role or remove collaborator
@@ -29,21 +39,21 @@ export async function PATCH(req: Request) {
 
   if (action === 'remove') {
     const { error } = await supabase
-      .from("user_collaborators")
+      .from("account_users")
       .delete()
       .eq("owner_user_id", user.id)
-      .eq("collaborator_user_id", collaborator_user_id)
+      .eq("member_user_id", collaborator_user_id)
     if (error) return NextResponse.json({ error: error.message }, { status: 400 })
     return NextResponse.json({ success: true })
   }
 
   const inputRole = String(body?.role || "").toLowerCase()
-  const role = (inputRole === "major" || inputRole === "editor") ? "editor" : "viewer"
+  const mappedRole = (inputRole === "major" || inputRole === "editor") ? "admin" : "user"
   const { error } = await supabase
-    .from("user_collaborators")
-    .update({ role })
+    .from("account_users")
+    .update({ role: mappedRole })
     .eq("owner_user_id", user.id)
-    .eq("collaborator_user_id", collaborator_user_id)
+    .eq("member_user_id", collaborator_user_id)
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
   return NextResponse.json({ success: true })
 }

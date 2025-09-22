@@ -152,7 +152,7 @@ export default function Dashboard() {
         // Only subscribe to essential updates
         callsSub = supabase
           .channel('calls-changes')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls', filter: `user_id=eq.${user.id}` }, debouncedFetchData)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, debouncedFetchData)
           .subscribe()
       } catch (error) {
         console.error("Dashboard initialization error:", error)
@@ -180,13 +180,25 @@ export default function Dashboard() {
         userId = user.id
       }
 
+      // Resolve owners set: self + any owners where I'm a member (active)
+      const owners: string[] = [userId]
+      const { data: memberships } = await supabase
+        .from("account_users")
+        .select("owner_user_id, is_active")
+        .eq("member_user_id", userId)
+        .eq("is_active", true)
+      ;(memberships || []).forEach((m: any) => {
+        const oid = String(m?.owner_user_id || "")
+        if (oid && !owners.includes(oid)) owners.push(oid)
+      })
+
       // Use Promise.allSettled for parallel requests scoped to current user
       const results = await Promise.allSettled([
         // Fetch recent calls with minimal data
         supabase
           .from("calls")
           .select("id, customer_name, customer_phone, call_type, status, duration, notes, created_at")
-          .eq("user_id", userId)
+          .in("user_id", owners)
           .order("created_at", { ascending: false })
           .limit(10),
         
@@ -194,14 +206,14 @@ export default function Dashboard() {
         supabase
           .from("calls")
           .select("call_type, status")
-          .eq("user_id", userId)
+          .in("user_id", owners)
           .limit(1000), // Reasonable limit for stats
         
         // Fetch campaigns with minimal data
         supabase
           .from("campaigns")
           .select("id, name, status, target_contacts, completed_calls, success_rate, created_at")
-          .eq("user_id", userId)
+          .in("user_id", owners)
           .order("created_at", { ascending: false })
           .limit(50),
         
@@ -209,7 +221,7 @@ export default function Dashboard() {
         supabase
           .from("call_history")
           .select("duration, cost, ai_summary, notes, call_date")
-          .eq("user_id", userId)
+          .in("user_id", owners)
           .order("call_date", { ascending: false })
           .limit(500), // Limit for performance
         
@@ -217,7 +229,7 @@ export default function Dashboard() {
         supabase
           .from("talking_points_events")
           .select("id, category_id, text, created_at")
-          .eq("user_id", userId)
+          .in("user_id", owners)
           .order("created_at", { ascending: false })
           .limit(1000)
       ])

@@ -36,18 +36,12 @@ export async function POST(req: Request) {
   if (listErr) return NextResponse.json({ error: String(listErr.message || listErr) }, { status: 400 })
   const existing = (usersByEmail?.users || []).find((u: any) => String(u.email || "").toLowerCase() === invitee_email)
 
-  let memberUserId: string | null = null
-  if (existing) {
-    memberUserId = existing.id
-  } else {
-    // Create the user without sending an email (simple-auth addition)
-    const { data: created, error: createErr } = await admin.auth.admin.createUser({
-      email: invitee_email,
-      email_confirm: true,
-    }) as any
-    if (createErr) return NextResponse.json({ error: String(createErr.message || createErr) }, { status: 400 })
-    memberUserId = created?.user?.id || null
+  // Only existing auth users can be invited
+  if (!existing) {
+    return NextResponse.json({ error: "User not found. Only existing auth users can be invited." }, { status: 400 })
   }
+
+  const memberUserId: string = existing.id
 
   if (!memberUserId) return NextResponse.json({ error: "Failed to resolve member user id" }, { status: 400 })
 

@@ -210,10 +210,23 @@ export default function SchedulingPage() {
 
   
   const fetchBatches = async (userId: string) => {
+    // Resolve owners: self + owners where I'm an active member
+    const owners: string[] = [userId]
+    const { data: memberships } = await supabase
+      .from("account_users")
+      .select("owner_user_id, is_active")
+      .eq("member_user_id", userId)
+      .eq("is_active", true)
+
+    ;(memberships || []).forEach((m: any) => {
+      const oid = String(m?.owner_user_id || "")
+      if (oid && !owners.includes(oid)) owners.push(oid)
+    })
+
     const { data, error } = await supabase
       .from("contact_batches")
       .select("*")
-      .eq("user_id", userId)
+      .in("user_id", owners)
       .order("created_at", { ascending: false })
 
     if (error) {

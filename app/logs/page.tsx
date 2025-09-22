@@ -44,7 +44,7 @@ export default function LogsPage() {
         // subscribe to real-time changes
         const channel = supabase
           .channel("user_login_logs_changes")
-          .on("postgres_changes", { event: "*", schema: "public", table: "user_login_logs", filter: `user_id=eq.${user.id}` }, () => {
+          .on("postgres_changes", { event: "*", schema: "public", table: "user_login_logs" }, () => {
             fetchLogs(user.id)
           })
           .subscribe()
@@ -59,10 +59,22 @@ export default function LogsPage() {
   }, [supabase])
 
   const fetchLogs = async (userId: string) => {
+    // Resolve owners: self + owners where I'm a member
+    const owners: string[] = [userId]
+    const { data: memberships } = await supabase
+      .from("account_users")
+      .select("owner_user_id, is_active")
+      .eq("member_user_id", userId)
+      .eq("is_active", true)
+    ;(memberships || []).forEach((m: any) => {
+      const oid = String(m?.owner_user_id || "")
+      if (oid && !owners.includes(oid)) owners.push(oid)
+    })
+
     const { data, error } = await supabase
       .from("user_login_logs")
       .select("*")
-      .eq("user_id", userId)
+      .in("user_id", owners)
       .order("created_at", { ascending: false })
       .limit(500)
 

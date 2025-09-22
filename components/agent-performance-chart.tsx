@@ -62,10 +62,23 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
 
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) { setData([]); setLoading(false); return }
+
+        // Resolve owners set (self + owners where I'm an active member)
+        const owners: string[] = [user.id]
+        const { data: memberships } = await supabase
+          .from("account_users")
+          .select("owner_user_id, is_active")
+          .eq("member_user_id", user.id)
+          .eq("is_active", true)
+        ;(memberships || []).forEach((m: any) => {
+          const oid = String(m?.owner_user_id || "")
+          if (oid && !owners.includes(oid)) owners.push(oid)
+        })
+
         const { data: rows, error } = await supabase
           .from("calls")
           .select("created_at")
-          .eq("user_id", user.id)
+          .in("user_id", owners)
           .gte("created_at", start.toISOString())
 
         if (error) throw error

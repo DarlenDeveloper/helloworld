@@ -80,10 +80,22 @@ export default function AnalyticsPage() {
       const endISO = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999).toISOString()
 
       // Fetch call history data (kept for potential future use)
+      // Resolve owners: self + owners where I'm an active member
+      const owners: string[] = [user.id]
+      const { data: memberships } = await supabase
+        .from("account_users")
+        .select("owner_user_id, is_active")
+        .eq("member_user_id", user.id)
+        .eq("is_active", true)
+      ;(memberships || []).forEach((m: any) => {
+        const oid = String(m?.owner_user_id || "")
+        if (oid && !owners.includes(oid)) owners.push(oid)
+      })
+
       const { data, error } = await supabase
         .from("call_history")
         .select("id,user_id,status,ai_summary,notes,call_date")
-        .eq("user_id", user.id)
+        .in("user_id", owners)
         .gte("call_date", startISO)
         .lte("call_date", endISO)
         .order("call_date", { ascending: true })
@@ -101,7 +113,7 @@ export default function AnalyticsPage() {
         const { data: callsRows, error: callsErr } = await supabase
           .from("calls")
           .select("id,user_id,status,created_at")
-          .eq("user_id", user.id)
+          .in("user_id", owners)
           .gte("created_at", startISO)
           .lte("created_at", endISO)
 
@@ -145,7 +157,7 @@ export default function AnalyticsPage() {
         const { data: talkingPointsEvents, error: talkingPointsErr } = await supabase
           .from("talking_points_events")
           .select("id,category_id,text,created_at")
-          .eq("user_id", user.id)
+          .in("user_id", owners)
           .gte("created_at", startISO)
           .lte("created_at", endISO)
           .order("created_at", { ascending: false })

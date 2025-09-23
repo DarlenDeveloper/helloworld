@@ -57,14 +57,18 @@ export default function DeepInsightsPage() {
       // Simple API call with offset for pagination - no date filtering
       const response = await fetch(`/api/vapi/calls?offset=${offset}`)
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+      // Attempt to parse JSON regardless of status to surface useful errors
+      let result: any = null
+      try {
+        result = await response.json()
+      } catch {
+        // ignore JSON parse errors here; we'll fall back to status text
       }
       
-      const result = await response.json()
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch calls')
+      if (!response.ok || !result?.success) {
+        const fallback = !response.ok ? `HTTP ${response.status}` : 'Failed to fetch calls'
+        const message = result?.error || fallback
+        throw new Error(message)
       }
       
       const callsData = result.data || []

@@ -2,41 +2,30 @@ import { NextResponse } from "next/server"
 import { VapiClient } from "@/lib/api/vapi"
 
 export async function GET(req: Request) {
-  // Skip Supabase auth for Vapi calls - they come from external API
-  // and don't need RLS
   console.log('Vapi calls endpoint called')
 
   try {
-    // Check if Vapi API key is configured
-    if (!process.env.VAPI_API_KEY) {
-      return NextResponse.json({ 
-        success: false, 
-        error: "VAPI_API_KEY is not configured in environment variables" 
-      }, { status: 500 })
-    }
-
     const { searchParams } = new URL(req.url)
-    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 50
-    const createdAtGte = searchParams.get('createdAtGte')
-    const createdAtLte = searchParams.get('createdAtLte')
-
-    console.log('Vapi API call params:', {
-      limit,
-      createdAtGte,
-      createdAtLte,
-      phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
-      baseUrl: process.env.VAPI_BASE_URL || 'https://api.vapi.ai'
-    })
-
+    const offset = searchParams.get('offset') ? parseInt(searchParams.get('offset')!) : 0
+    
+    // Use VapiClient which is already working
     const vapi = new VapiClient()
+    
+    // Simple call without date filtering - just get all calls
     const calls = await vapi.listCalls({
-      limit,
-      createdAtGte: createdAtGte || undefined,
-      createdAtLte: createdAtLte || undefined
+      limit: 50
     })
-
+    
     console.log(`Vapi API returned ${calls?.length || 0} calls`)
-    return NextResponse.json({ success: true, data: calls || [] })
+    
+    // Handle pagination by slicing the results
+    const paginatedCalls = calls?.slice(offset, offset + 50) || []
+    
+    return NextResponse.json({ 
+      success: true, 
+      data: paginatedCalls,
+      hasMore: calls?.length > (offset + 50) // If there are more calls beyond current page
+    })
   } catch (e: any) {
     console.error("Vapi calls error:", e)
     

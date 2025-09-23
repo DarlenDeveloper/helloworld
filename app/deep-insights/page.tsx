@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Calendar, Phone, Clock, DollarSign, BarChart3, Users, Search } from "lucide-react"
+import { Phone, Clock, DollarSign, BarChart3, Search, ChevronsLeft, ChevronsRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -39,36 +39,22 @@ interface Metrics {
 
 export default function DeepInsightsPage() {
   const [calls, setCalls] = useState<Call[]>([])
+  const [allCalls, setAllCalls] = useState<Call[]>([])
   const [metrics, setMetrics] = useState<Metrics>({ totalCalls: 0, avgDuration: 0, totalCost: 0, successRate: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
-  const [dateRange, setDateRange] = useState({
-    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  })
+  const [currentPage, setCurrentPage] = useState(0)
+  const [hasMore, setHasMore] = useState(true)
+  const CALLS_PER_PAGE = 50
 
-  const fetchCalls = async () => {
+  const fetchCalls = async (offset: number = 0) => {
     setLoading(true)
     setError(null)
     
     try {
-      // Create proper date objects with time
-      const startDate = new Date(dateRange.start)
-      startDate.setHours(0, 0, 0, 0)
-      
-      const endDate = new Date(dateRange.end)
-      endDate.setHours(23, 59, 59, 999)
-      
-      const params = new URLSearchParams({
-        createdAtGte: startDate.toISOString(),
-        createdAtLte: endDate.toISOString(),
-        limit: '100'
-      })
-      
-      const response = await fetch(`/api/vapi/calls?${params}`, {
-        credentials: 'include'
-      })
+      // Simple API call with offset for pagination - no date filtering
+      const response = await fetch(`/api/vapi/calls?offset=${offset}`)
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
@@ -81,13 +67,23 @@ export default function DeepInsightsPage() {
       }
       
       const callsData = result.data || []
-      setCalls(callsData)
+      setHasMore(result.hasMore || false)
       
-      // Calculate metrics
-      const totalCalls = callsData.length
-      const avgDuration = totalCalls > 0 ? callsData.reduce((sum: number, call: Call) => sum + (call.duration || 0), 0) / totalCalls : 0
-      const totalCost = callsData.reduce((sum: number, call: Call) => sum + (call.cost || 0), 0)
-      const successfulCalls = callsData.filter((call: Call) => 
+      if (offset === 0) {
+        // First page - replace all data
+        setAllCalls(callsData)
+        setCalls(callsData.slice(0, CALLS_PER_PAGE))
+      } else {
+        // Append to existing data
+        setAllCalls(prev => [...prev, ...callsData])
+      }
+      
+      // Calculate metrics from all fetched data
+      const allData = offset === 0 ? callsData : [...allCalls, ...callsData]
+      const totalCalls = allData.length
+      const avgDuration = totalCalls > 0 ? allData.reduce((sum: number, call: Call) => sum + (call.duration || 0), 0) / totalCalls : 0
+      const totalCost = allData.reduce((sum: number, call: Call) => sum + (call.cost || 0), 0)
+      const successfulCalls = allData.filter((call: Call) => 
         ['customer-ended-call', 'assistant-ended-call'].includes(call.endedReason || '')
       ).length
       const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 0
@@ -108,8 +104,8 @@ export default function DeepInsightsPage() {
   }
   
   useEffect(() => {
-    fetchCalls()
-  }, [dateRange])
+    fetchCalls(0)
+  }, [])
   
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -127,12 +123,27 @@ export default function DeepInsightsPage() {
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
   }
   
+  const loadMore = async () => {
+    if (!hasMore || loading) return
+    const newOffset = allCalls.length
+    await fetchCalls(newOffset)
+  }
+  
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+    const start = page * CALLS_PER_PAGE
+    const end = start + CALLS_PER_PAGE
+    setCalls(allCalls.slice(start, end))
+  }
+  
   const filteredCalls = calls.filter(call => 
     !searchTerm || 
     call.customer?.number?.includes(searchTerm) ||
     call.customer?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     call.id.toLowerCase().includes(searchTerm.toLowerCase())
   )
+  
+  const totalPages = Math.ceil(allCalls.length / CALLS_PER_PAGE)
 
   return (
     <div className="ml-20 p-6 bg-gray-50 min-h-screen">
@@ -144,21 +155,7 @@ export default function DeepInsightsPage() {
 
       {/* Controls */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
-        <div className="flex gap-2">
-          <Input
-            type="date"
-            value={dateRange.start}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-            className="w-40"
-          />
-          <Input
-            type="date"
-            value={dateRange.end}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-            className="w-40"
-          />
-        </div>
-        <div className="flex-1 max-w-sm">
+        <div className="flex-1 max-w-md">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
@@ -169,9 +166,16 @@ export default function DeepInsightsPage() {
             />
           </div>
         </div>
-        <Button onClick={fetchCalls} disabled={loading}>
-          {loading ? 'Loading...' : 'Refresh'}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => fetchCalls(0)} disabled={loading}>
+            {loading ? 'Loading...' : 'Refresh All'}
+          </Button>
+          {hasMore && (
+            <Button onClick={loadMore} disabled={loading} variant="outline">
+              Load More
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Metrics Grid */}
@@ -230,7 +234,34 @@ export default function DeepInsightsPage() {
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span>Recent Calls</span>
-            <Badge variant="secondary">{filteredCalls.length} calls</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">
+                Showing {filteredCalls.length} of {allCalls.length} calls
+              </Badge>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handlePageChange(Math.max(0, currentPage - 1))}
+                    disabled={currentPage === 0}
+                  >
+                    <ChevronsLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-sm px-2">
+                    Page {currentPage + 1} of {totalPages}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handlePageChange(Math.min(totalPages - 1, currentPage + 1))}
+                    disabled={currentPage === totalPages - 1}
+                  >
+                    <ChevronsRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -238,7 +269,7 @@ export default function DeepInsightsPage() {
             <div className="text-center py-8">
               <p className="text-red-500 mb-2">Error loading data</p>
               <p className="text-sm text-gray-500">{error}</p>
-              <Button onClick={fetchCalls} className="mt-4">Try Again</Button>
+              <Button onClick={() => fetchCalls(0)} className="mt-4">Try Again</Button>
             </div>
           ) : loading ? (
             <div className="text-center py-8">
@@ -305,6 +336,69 @@ export default function DeepInsightsPage() {
                 </tbody>
               </table>
             </div>
+            
+            {/* Bottom Pagination */}
+            {totalPages > 1 && allCalls.length > 0 && (
+              <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handlePageChange(Math.max(0, currentPage - 1))}
+                  disabled={currentPage === 0}
+                >
+                  <ChevronsLeft className="h-4 w-4 mr-1" />
+                  Previous
+                </Button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum = i
+                    if (totalPages > 5) {
+                      if (currentPage < 3) {
+                        pageNum = i
+                      } else if (currentPage > totalPages - 3) {
+                        pageNum = totalPages - 5 + i
+                      } else {
+                        pageNum = currentPage - 2 + i
+                      }
+                    }
+                    return (
+                      <Button
+                        key={pageNum}
+                        size="sm"
+                        variant={currentPage === pageNum ? "default" : "outline"}
+                        onClick={() => handlePageChange(pageNum)}
+                        className="w-8 h-8 p-0"
+                      >
+                        {pageNum + 1}
+                      </Button>
+                    )
+                  })}
+                </div>
+                
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handlePageChange(Math.min(totalPages - 1, currentPage + 1))}
+                  disabled={currentPage === totalPages - 1}
+                >
+                  Next
+                  <ChevronsRight className="h-4 w-4 ml-1" />
+                </Button>
+                
+                {hasMore && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={loadMore}
+                    disabled={loading}
+                    className="ml-4"
+                  >
+                    Load More Data
+                  </Button>
+                )}
+              </div>
+            )}
           )}
         </CardContent>
       </Card>

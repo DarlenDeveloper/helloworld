@@ -200,7 +200,7 @@ export class VapiClient {
     }
 
     const queryString = searchParams.toString();
-    const path = `/calls${queryString ? `?${queryString}` : ''}`;
+    const path = `/call${queryString ? `?${queryString}` : ''}`;
     
     return this.fetchJson<any[]>(path, { method: 'GET' });
   }

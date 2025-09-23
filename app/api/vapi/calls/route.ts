@@ -7,25 +7,20 @@ export async function GET(req: Request) {
   console.log('Vapi calls endpoint called')
 
   try {
+    // Even if caller provides offset, we ignore it when querying Vapi.
+    // We fetch all calls with the exact API shape (no offset) and paginate on the client.
     const { searchParams } = new URL(req.url)
-    const offset = searchParams.get('offset') ? parseInt(searchParams.get('offset')!) : 0
-    
+    void searchParams // not used
+
     // Use VapiClient which is already working
     const vapi = new VapiClient()
 
-    // Server-side pagination, no date filtering
-    const calls = await vapi.listCalls({
-      limit: 50,
-      offset,
-    })
+    // Exact call: no date filters, no offset. phoneNumberId is injected by VapiClient from env.
+    const calls = await vapi.listCalls()
 
-    console.log(`Vapi API returned ${calls?.length || 0} calls (offset=${offset})`)
+    console.log(`Vapi API returned ${calls?.length || 0} calls`)
 
-    return NextResponse.json({ 
-      success: true, 
-      data: calls || [],
-      hasMore: (calls?.length || 0) === 50
-    })
+    return NextResponse.json({ success: true, data: calls || [], hasMore: false })
   } catch (e: any) {
     console.error("Vapi calls error:", e)
     

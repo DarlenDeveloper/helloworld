@@ -46,16 +46,15 @@ export default function DeepInsightsPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [currentPage, setCurrentPage] = useState(0)
-  const [hasMore, setHasMore] = useState(true)
   const CALLS_PER_PAGE = 50
 
-  const fetchCalls = async (offset: number = 0) => {
+  const fetchCalls = async () => {
     setLoading(true)
     setError(null)
     
     try {
-      // Simple API call with offset for pagination - no date filtering
-      const response = await fetch(`/api/vapi/calls?offset=${offset}`)
+      // Fetch all calls once - no date filters and no offset
+      const response = await fetch(`/api/vapi/calls`)
       
       // Attempt to parse JSON regardless of status to surface useful errors
       let result: any = null
@@ -72,19 +71,13 @@ export default function DeepInsightsPage() {
       }
       
       const callsData = result.data || []
-      setHasMore(result.hasMore || false)
-      
-      if (offset === 0) {
-        // First page - replace all data
-        setAllCalls(callsData)
-        setCalls(callsData.slice(0, CALLS_PER_PAGE))
-      } else {
-        // Append to existing data
-        setAllCalls(prev => [...prev, ...callsData])
-      }
+      // Replace data and show first page
+      setAllCalls(callsData)
+      setCurrentPage(0)
+      setCalls(callsData.slice(0, CALLS_PER_PAGE))
       
       // Calculate metrics from all fetched data
-      const allData = offset === 0 ? callsData : [...allCalls, ...callsData]
+      const allData = callsData
       const totalCalls = allData.length
       const avgDuration = totalCalls > 0 ? allData.reduce((sum: number, call: Call) => sum + (call.duration || 0), 0) / totalCalls : 0
       const totalCost = allData.reduce((sum: number, call: Call) => sum + (call.cost || 0), 0)
@@ -109,7 +102,7 @@ export default function DeepInsightsPage() {
   }
   
   useEffect(() => {
-    fetchCalls(0)
+    fetchCalls()
   }, [])
   
   const getStatusColor = (status: string) => {
@@ -126,12 +119,6 @@ export default function DeepInsightsPage() {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
-  }
-  
-  const loadMore = async () => {
-    if (!hasMore || loading) return
-    const newOffset = allCalls.length
-    await fetchCalls(newOffset)
   }
   
   const handlePageChange = (page: number) => {
@@ -172,14 +159,9 @@ export default function DeepInsightsPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => fetchCalls(0)} disabled={loading}>
-            {loading ? 'Loading...' : 'Refresh All'}
+          <Button onClick={() => fetchCalls()} disabled={loading}>
+            {loading ? 'Loading...' : 'Refresh'}
           </Button>
-          {hasMore && (
-            <Button onClick={loadMore} disabled={loading} variant="outline">
-              Load More
-            </Button>
-          )}
         </div>
       </div>
 
@@ -274,7 +256,7 @@ export default function DeepInsightsPage() {
             <div className="text-center py-8">
               <p className="text-red-500 mb-2">Error loading data</p>
               <p className="text-sm text-gray-500">{error}</p>
-              <Button onClick={() => fetchCalls(0)} className="mt-4">Try Again</Button>
+              <Button onClick={() => fetchCalls()} className="mt-4">Try Again</Button>
             </div>
           ) : loading ? (
             <div className="text-center py-8">
@@ -391,18 +373,6 @@ export default function DeepInsightsPage() {
                     Next
                     <ChevronsRight className="h-4 w-4 ml-1" />
                   </Button>
-
-                  {hasMore && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={loadMore}
-                      disabled={loading}
-                      className="ml-4"
-                    >
-                      Load More Data
-                    </Button>
-                  )}
                 </div>
               )}
             </>

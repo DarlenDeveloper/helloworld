@@ -91,27 +91,36 @@ export class VapiClient {
 
   private async fetchJson<T>(path: string, init: Omit<RequestInit, 'body'> & { body?: any }): Promise<T> {
     const url = `${this.baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+    
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.token}`,
+      'Accept': 'application/json',
+    };
+    
+    // Merge additional headers
+    if (init.headers) {
+      Object.assign(headers, init.headers);
+    }
+    
+    // Only add Content-Type for requests with body
+    if (init.body) {
+      headers['Content-Type'] = 'application/json';
+    }
+    
     const res = await fetch(url, {
       method: init.method || 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(init.headers || {}),
-      },
+      headers,
       body: init.body ? (typeof init.body === 'string' ? init.body : JSON.stringify(init.body)) : undefined,
     });
 
-    const text = await res.text();
-    let data: any = undefined;
-    try { data = text ? JSON.parse(text) : undefined; } catch { /* leave as text */ }
-
     if (!res.ok) {
-      const msg = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
-      const err = new Error(`Vapi request failed: ${msg}`) as Error & { status?: number; raw?: any };
-      (err as any).status = res.status;
-      (err as any).raw = data ?? text;
-      throw err;
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    }
+
+    const data = await res.json().catch(() => null);
+    if (data === null) {
+      throw new Error('Invalid JSON response');
     }
 
     return data as T;
@@ -166,6 +175,34 @@ export class VapiClient {
 
     const body: VapiAnalyticsRequest = { queries };
     return this.fetchJson<VapiAnalyticsResponse>('/analytics', { method: 'POST', body });
+  }
+
+  /**
+   * List calls from Vapi API
+   * Automatically filters by VAPI_PHONE_NUMBER_ID from environment
+   */
+  async listCalls(params?: {
+    limit?: number;
+    createdAtGte?: string;
+    createdAtLte?: string;
+    phoneNumberId?: string;
+  }): Promise<any[]> {
+    const searchParams = new URLSearchParams();
+    
+    if (params?.limit) searchParams.set('limit', params.limit.toString());
+    if (params?.createdAtGte) searchParams.set('createdAtGte', params.createdAtGte);
+    if (params?.createdAtLte) searchParams.set('createdAtLte', params.createdAtLte);
+    
+    // Always use phoneNumberId from environment for filtering (as specified by user)
+    const phoneNumberId = this.phoneNumberId || params?.phoneNumberId;
+    if (phoneNumberId) {
+      searchParams.set('phoneNumberId', phoneNumberId);
+    }
+
+    const queryString = searchParams.toString();
+    const path = `/calls${queryString ? `?${queryString}` : ''}`;
+    
+    return this.fetchJson<any[]>(path, { method: 'GET' });
   }
 }
 

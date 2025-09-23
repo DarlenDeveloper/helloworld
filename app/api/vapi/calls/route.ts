@@ -1,20 +1,10 @@
 import { NextResponse } from "next/server"
-import { createClient } from "@/lib/supabase/server"
 import { VapiClient } from "@/lib/api/vapi"
 
 export async function GET(req: Request) {
-  const supabase = await createClient()
-
-  // Resolve owner for RLS (optional for Vapi calls since they don't use Supabase RLS)
-  let owner_id: string | null = null
-  try {
-    const { data } = await (supabase as any).auth.getUser?.()
-    owner_id = data?.user?.id || null
-  } catch {}
-  
-  // For Vapi calls, we don't strictly need RLS since data comes from external API
-  // But we can log the user for audit purposes
-  console.log('User ID for audit:', owner_id || 'anonymous')
+  // Skip Supabase auth for Vapi calls - they come from external API
+  // and don't need RLS
+  console.log('Vapi calls endpoint called')
 
   try {
     // Check if Vapi API key is configured

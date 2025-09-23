@@ -53,13 +53,22 @@ export default function DeepInsightsPage() {
     setError(null)
     
     try {
+      // Create proper date objects with time
+      const startDate = new Date(dateRange.start)
+      startDate.setHours(0, 0, 0, 0)
+      
+      const endDate = new Date(dateRange.end)
+      endDate.setHours(23, 59, 59, 999)
+      
       const params = new URLSearchParams({
-        createdAtGte: new Date(dateRange.start).toISOString(),
-        createdAtLte: new Date(dateRange.end + 'T23:59:59').toISOString(),
+        createdAtGte: startDate.toISOString(),
+        createdAtLte: endDate.toISOString(),
         limit: '100'
       })
       
-      const response = await fetch(`/api/vapi/calls?${params}`)
+      const response = await fetch(`/api/vapi/calls?${params}`, {
+        credentials: 'include'
+      })
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)

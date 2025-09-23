@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useEffect, useState } from "react"
-import { Phone, Clock, DollarSign, BarChart3, Search, ChevronsLeft, ChevronsRight } from "lucide-react"
+import { Phone, Clock, BarChart3, Search, ChevronsLeft, ChevronsRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -34,14 +34,13 @@ interface Call {
 interface Metrics {
   totalCalls: number
   avgDuration: number
-  totalCost: number
   successRate: number
 }
 
 export default function DeepInsightsPage() {
   const [calls, setCalls] = useState<Call[]>([])
   const [allCalls, setAllCalls] = useState<Call[]>([])
-  const [metrics, setMetrics] = useState<Metrics>({ totalCalls: 0, avgDuration: 0, totalCost: 0, successRate: 0 })
+  const [metrics, setMetrics] = useState<Metrics>({ totalCalls: 0, avgDuration: 0, successRate: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
@@ -79,8 +78,7 @@ export default function DeepInsightsPage() {
       // Calculate metrics from all fetched data
       const allData = callsData
       const totalCalls = allData.length
-      const avgDuration = totalCalls > 0 ? allData.reduce((sum: number, call: Call) => sum + (call.duration || 0), 0) / totalCalls : 0
-      const totalCost = allData.reduce((sum: number, call: Call) => sum + (call.cost || 0), 0)
+      const avgDuration = totalCalls > 0 ? allData.reduce((sum: number, call: Call) => sum + getDurationSeconds(call), 0) / totalCalls : 0
       const successfulCalls = allData.filter((call: Call) => 
         ['customer-ended-call', 'assistant-ended-call'].includes(call.endedReason || '')
       ).length
@@ -89,7 +87,6 @@ export default function DeepInsightsPage() {
       setMetrics({
         totalCalls,
         avgDuration: Math.round(avgDuration / 60), // Convert to minutes
-        totalCost: parseFloat(totalCost.toFixed(2)),
         successRate: Math.round(successRate)
       })
       
@@ -119,6 +116,24 @@ export default function DeepInsightsPage() {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+  }
+
+  // Prefer explicit duration; otherwise compute from startedAt/endedAt
+  const getDurationSeconds = (call: Call): number => {
+    if (typeof call.duration === 'number' && call.duration > 0) return Math.round(call.duration)
+    if (call.startedAt && call.endedAt) {
+      const start = new Date(call.startedAt).getTime()
+      const end = new Date(call.endedAt).getTime()
+      const delta = Math.max(0, Math.floor((end - start) / 1000))
+      return delta
+    }
+    return 0
+  }
+
+  const formatEndedReason = (endedReason?: string) => {
+    if (!endedReason) return 'N/A'
+    if (/error/i.test(endedReason)) return 'null'
+    return endedReason.replace(/-/g, ' ')
   }
   
   const handlePageChange = (page: number) => {
@@ -166,7 +181,7 @@ export default function DeepInsightsPage() {
       </div>
 
       {/* Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -191,17 +206,7 @@ export default function DeepInsightsPage() {
           </CardContent>
         </Card>
         
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Total Cost</p>
-                <p className="text-2xl font-bold text-gray-900">${metrics.totalCost}</p>
-              </div>
-              <DollarSign className="h-8 w-8 text-amber-500" />
-            </div>
-          </CardContent>
-        </Card>
+        
         
         <Card>
           <CardContent className="p-4">
@@ -276,8 +281,8 @@ export default function DeepInsightsPage() {
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Call ID</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Customer</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Type</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Duration</th>
-                      <th className="text-left py-3 px-4 font-medium text-gray-600">Cost</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">End Reason</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Created</th>
                     </tr>
@@ -306,14 +311,14 @@ export default function DeepInsightsPage() {
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-gray-900">
-                          {formatDuration(call.duration)}
+                          {call.type || 'N/A'}
                         </td>
                         <td className="py-3 px-4 text-gray-900">
-                          ${(call.cost || 0).toFixed(3)}
+                          {formatDuration(getDurationSeconds(call))}
                         </td>
                         <td className="py-3 px-4">
                           <span className="text-sm text-gray-600">
-                            {call.endedReason?.replace(/-/g, ' ') || 'N/A'}
+                            {formatEndedReason(call.endedReason)}
                           </span>
                         </td>
                         <td className="py-3 px-4 text-sm text-gray-500">

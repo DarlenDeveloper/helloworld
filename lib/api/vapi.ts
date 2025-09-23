@@ -183,6 +183,7 @@ export class VapiClient {
    */
   async listCalls(params?: {
     limit?: number;
+    offset?: number;
     createdAtGte?: string;
     createdAtLte?: string;
     phoneNumberId?: string;
@@ -190,6 +191,7 @@ export class VapiClient {
     const searchParams = new URLSearchParams();
     
     if (params?.limit) searchParams.set('limit', params.limit.toString());
+    if (typeof params?.offset === 'number') searchParams.set('offset', params.offset.toString());
     if (params?.createdAtGte) searchParams.set('createdAtGte', params.createdAtGte);
     if (params?.createdAtLte) searchParams.set('createdAtLte', params.createdAtLte);
     

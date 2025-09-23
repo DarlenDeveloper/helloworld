@@ -1,5 +1,6 @@
 "use client"
 
+import type React from "react"
 import { useEffect, useState } from "react"
 import { Phone, Clock, DollarSign, BarChart3, Search, ChevronsLeft, ChevronsRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -278,127 +279,129 @@ export default function DeepInsightsPage() {
           ) : filteredCalls.length === 0 ? (
             <div className="text-center py-8">
               <Phone className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-500">No calls found for the selected period</p>
+              <p className="text-gray-500">No calls found</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Call ID</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Customer</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Duration</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Cost</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">End Reason</th>
-                    <th className="text-left py-3 px-4 font-medium text-gray-600">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCalls.map((call) => (
-                    <tr key={call.id} className="border-b hover:bg-gray-50">
-                      <td className="py-3 px-4">
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {call.id.slice(0, 8)}...
-                        </code>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div>
-                          <p className="font-medium text-gray-900">
-                            {call.customer?.name || 'Unknown'}
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            {call.customer?.number || 'N/A'}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <Badge className={getStatusColor(call.status)}>
-                          {call.status}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4 text-gray-900">
-                        {formatDuration(call.duration)}
-                      </td>
-                      <td className="py-3 px-4 text-gray-900">
-                        ${(call.cost || 0).toFixed(3)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="text-sm text-gray-600">
-                          {call.endedReason?.replace(/-/g, ' ') || 'N/A'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-500">
-                        {new Date(call.createdAt).toLocaleDateString()}
-                      </td>
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Call ID</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Customer</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Duration</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Cost</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">End Reason</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Created</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            
-            {/* Bottom Pagination */}
-            {totalPages > 1 && allCalls.length > 0 && (
-              <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handlePageChange(Math.max(0, currentPage - 1))}
-                  disabled={currentPage === 0}
-                >
-                  <ChevronsLeft className="h-4 w-4 mr-1" />
-                  Previous
-                </Button>
-                
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum = i
-                    if (totalPages > 5) {
-                      if (currentPage < 3) {
-                        pageNum = i
-                      } else if (currentPage > totalPages - 3) {
-                        pageNum = totalPages - 5 + i
-                      } else {
-                        pageNum = currentPage - 2 + i
-                      }
-                    }
-                    return (
-                      <Button
-                        key={pageNum}
-                        size="sm"
-                        variant={currentPage === pageNum ? "default" : "outline"}
-                        onClick={() => handlePageChange(pageNum)}
-                        className="w-8 h-8 p-0"
-                      >
-                        {pageNum + 1}
-                      </Button>
-                    )
-                  })}
-                </div>
-                
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handlePageChange(Math.min(totalPages - 1, currentPage + 1))}
-                  disabled={currentPage === totalPages - 1}
-                >
-                  Next
-                  <ChevronsRight className="h-4 w-4 ml-1" />
-                </Button>
-                
-                {hasMore && (
+                  </thead>
+                  <tbody>
+                    {filteredCalls.map((call) => (
+                      <tr key={call.id} className="border-b hover:bg-gray-50">
+                        <td className="py-3 px-4">
+                          <code className="text-xs bg-gray-100 px-2 py-1 rounded">
+                            {call.id.slice(0, 8)}...
+                          </code>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div>
+                            <p className="font-medium text-gray-900">
+                              {call.customer?.name || 'Unknown'}
+                            </p>
+                            <p className="text-sm text-gray-500">
+                              {call.customer?.number || 'N/A'}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <Badge className={getStatusColor(call.status)}>
+                            {call.status}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-4 text-gray-900">
+                          {formatDuration(call.duration)}
+                        </td>
+                        <td className="py-3 px-4 text-gray-900">
+                          ${(call.cost || 0).toFixed(3)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="text-sm text-gray-600">
+                            {call.endedReason?.replace(/-/g, ' ') || 'N/A'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-500">
+                          {new Date(call.createdAt).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Bottom Pagination */}
+              {totalPages > 1 && allCalls.length > 0 && (
+                <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t">
                   <Button
                     size="sm"
-                    variant="secondary"
-                    onClick={loadMore}
-                    disabled={loading}
-                    className="ml-4"
+                    variant="outline"
+                    onClick={() => handlePageChange(Math.max(0, currentPage - 1))}
+                    disabled={currentPage === 0}
                   >
-                    Load More Data
+                    <ChevronsLeft className="h-4 w-4 mr-1" />
+                    Previous
                   </Button>
-                )}
-              </div>
-            )}
+
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum = i
+                      if (totalPages > 5) {
+                        if (currentPage < 3) {
+                          pageNum = i
+                        } else if (currentPage > totalPages - 3) {
+                          pageNum = totalPages - 5 + i
+                        } else {
+                          pageNum = currentPage - 2 + i
+                        }
+                      }
+                      return (
+                        <Button
+                          key={pageNum}
+                          size="sm"
+                          variant={currentPage === pageNum ? "default" : "outline"}
+                          onClick={() => handlePageChange(pageNum)}
+                          className="w-8 h-8 p-0"
+                        >
+                          {pageNum + 1}
+                        </Button>
+                      )
+                    })}
+                  </div>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handlePageChange(Math.min(totalPages - 1, currentPage + 1))}
+                    disabled={currentPage === totalPages - 1}
+                  >
+                    Next
+                    <ChevronsRight className="h-4 w-4 ml-1" />
+                  </Button>
+
+                  {hasMore && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={loadMore}
+                      disabled={loading}
+                      className="ml-4"
+                    >
+                      Load More Data
+                    </Button>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

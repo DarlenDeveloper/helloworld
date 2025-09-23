@@ -10,21 +10,19 @@ export async function GET(req: Request) {
     
     // Use VapiClient which is already working
     const vapi = new VapiClient()
-    
-    // Simple call without date filtering - just get all calls
+
+    // Server-side pagination, no date filtering
     const calls = await vapi.listCalls({
-      limit: 50
+      limit: 50,
+      offset,
     })
-    
-    console.log(`Vapi API returned ${calls?.length || 0} calls`)
-    
-    // Handle pagination by slicing the results
-    const paginatedCalls = calls?.slice(offset, offset + 50) || []
-    
+
+    console.log(`Vapi API returned ${calls?.length || 0} calls (offset=${offset})`)
+
     return NextResponse.json({ 
       success: true, 
-      data: paginatedCalls,
-      hasMore: calls?.length > (offset + 50) // If there are more calls beyond current page
+      data: calls || [],
+      hasMore: (calls?.length || 0) === 50
     })
   } catch (e: any) {
     console.error("Vapi calls error:", e)

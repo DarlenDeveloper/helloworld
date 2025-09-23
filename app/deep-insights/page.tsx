@@ -281,8 +281,8 @@ export default function DeepInsightsPage() {
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Call ID</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Customer</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
-                      <th className="text-left py-3 px-4 font-medium text-gray-600">Type</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Duration</th>
+                      <th className="text-left py-3 px-4 font-medium text-gray-600">Type</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">End Reason</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-600">Created</th>
                     </tr>
@@ -311,10 +311,10 @@ export default function DeepInsightsPage() {
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-gray-900">
-                          {call.type || 'N/A'}
+                          {formatDuration(getDurationSeconds(call))}
                         </td>
                         <td className="py-3 px-4 text-gray-900">
-                          {formatDuration(getDurationSeconds(call))}
+                          {call.type || 'N/A'}
                         </td>
                         <td className="py-3 px-4">
                           <span className="text-sm text-gray-600">

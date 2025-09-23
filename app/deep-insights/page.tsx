@@ -14,7 +14,6 @@ interface Call {
   status: string
   endedReason?: string
   duration?: number
-  cost?: number
   createdAt: string
   startedAt?: string
   endedAt?: string

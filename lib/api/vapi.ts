@@ -40,18 +40,56 @@ export type VapiCreateCampaignResponse = {
   // additional fields omitted
 };
 
+export type VapiAnalyticsOperation = {
+  operation: 'sum' | 'count' | 'avg' | 'min' | 'max';
+  column: string;
+};
+
+export type VapiAnalyticsQuery = {
+  table: 'call';
+  name: string;
+  operations: VapiAnalyticsOperation[];
+  timeRange?: {
+    step?: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month';
+    start: string; // ISO-8601
+    end: string;   // ISO-8601
+    timezone?: string;
+  };
+  groupBy?: string[];
+  filters?: Record<string, any>;
+};
+
+export type VapiAnalyticsRequest = {
+  queries: VapiAnalyticsQuery[];
+};
+
+export type VapiAnalyticsResult = {
+  name: string;
+  timeRange?: {
+    step: string;
+    start: string;
+    end: string;
+    timezone?: string;
+  };
+  result: Record<string, any>[];
+};
+
+export type VapiAnalyticsResponse = VapiAnalyticsResult[];
+
 export class VapiClient {
   private baseUrl: string;
   private token: string;
+  private phoneNumberId?: string;
 
-  constructor(params?: { baseUrl?: string; token?: string }) {
+  constructor(params?: { baseUrl?: string; token?: string; phoneNumberId?: string }) {
     this.baseUrl = params?.baseUrl || process.env.VAPI_BASE_URL || 'https://api.vapi.ai';
     const token = params?.token || process.env.VAPI_API_KEY;
     if (!token) throw new Error('VAPI_API_KEY is not set');
     this.token = token;
+    this.phoneNumberId = params?.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
   }
 
-  private async fetchJson<T>(path: string, init: RequestInit & { body?: any }): Promise<T> {
+  private async fetchJson<T>(path: string, init: Omit<RequestInit, 'body'> & { body?: any }): Promise<T> {
     const url = `${this.baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
     const res = await fetch(url, {
       method: init.method || 'POST',
@@ -84,7 +122,7 @@ export class VapiClient {
    * If phoneNumberId is not provided in request, uses process.env.VAPI_PHONE_NUMBER_ID.
    */
   async createCampaign(req: Partial<VapiCreateCampaignRequest> & Pick<VapiCreateCampaignRequest, 'name' | 'customers'>): Promise<VapiCreateCampaignResponse> {
-    const phoneNumberId = req.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID;
+    const phoneNumberId = req.phoneNumberId || this.phoneNumberId;
     if (!phoneNumberId) throw new Error('VAPI_PHONE_NUMBER_ID is not set');
 
     if (!Array.isArray(req.customers) || req.customers.length === 0) {
@@ -105,6 +143,29 @@ export class VapiClient {
     };
 
     return this.fetchJson<VapiCreateCampaignResponse>('/campaign', { method: 'POST', body });
+  }
+
+  /**
+   * Query Vapi Analytics API.
+   * Filters by phoneNumberId from environment if available.
+   */
+  async getAnalytics(req: VapiAnalyticsRequest): Promise<VapiAnalyticsResponse> {
+    // Add phoneNumberId filter if available
+    const queries = req.queries.map(query => {
+      if (this.phoneNumberId && !query.filters?.phoneNumberId) {
+        return {
+          ...query,
+          filters: {
+            ...query.filters,
+            phoneNumberId: this.phoneNumberId
+          }
+        };
+      }
+      return query;
+    });
+
+    const body: VapiAnalyticsRequest = { queries };
+    return this.fetchJson<VapiAnalyticsResponse>('/analytics', { method: 'POST', body });
   }
 }
 

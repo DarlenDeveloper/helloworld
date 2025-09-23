@@ -34,6 +34,7 @@ export function Sidebar() {
     { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },
     { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
+    { icon: Brain, href: "/deep-insights", label: "Deep Insights", active: pathname === "/deep-insights" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
     { icon: FormInput, href: "/forms/contact", label: "Web Forms", active: pathname === "/forms/contact" },
     { icon: Users, href: "/users", label: "Users", active: pathname === "/users" },

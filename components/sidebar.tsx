@@ -29,7 +29,7 @@ export function Sidebar() {
   const menuItems = [
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
     { icon: FileText, href: "/batches", label: "Batches", active: pathname?.startsWith("/batches") },
-    { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
+    { icon: Phone, href: "/scheduling", label: "CAMPAIGNS", active: pathname === "/scheduling" },
     { icon: Phone, href: "/outbound-call", label: "Outbound Call", active: pathname === "/outbound-call" },
     { icon: MessageCircle, href: "/scheduling/whatsapp", label: "WhatsApp Scheduling", active: pathname === "/scheduling/whatsapp" },
     { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },
@@ -41,7 +41,6 @@ export function Sidebar() {
     { icon: Users, href: "/users", label: "Users", active: pathname === "/users" },
     { icon: Bell, href: "/notifications", label: "Notifications", active: pathname === "/notifications" },
     { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
-    { icon: DollarSign, href: "/billing", label: "Billing", active: pathname === "/billing" },
     { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
   ]
 

@@ -16,20 +16,22 @@ const QUICK_TEMPLATES = [
   {
     id: "package_pickup",
     name: "Package Pickup",
-    opening: "Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?",
-    message: "Great! The reason for my call is to inform you that your package has arrived at our office. You can pick it up during our business hours from 9 AM to 6 PM."
+    message: "Great! The reason for my call is to inform you that your package has arrived at our office. You can pick it up during our business hours from 9 AM to 6 PM. Please bring a valid ID for verification."
   },
   {
     id: "appointment_reminder", 
     name: "Appointment Reminder",
-    opening: "Hello {{customerName}}, this is {{callerName}} from {{companyName}}.",
-    message: "I'm calling to remind you about your upcoming appointment scheduled for {{appointmentDate}} at {{appointmentTime}}. Please let me know if you need to reschedule."
+    message: "Perfect! I'm calling to remind you about your upcoming appointment scheduled for {{appointmentDate}} at {{appointmentTime}}. Please let me know if you need to reschedule or if you have any questions."
   },
   {
     id: "payment_reminder",
     name: "Payment Reminder", 
-    opening: "Hi {{customerName}}, this is {{callerName}} from {{companyName}}.",
-    message: "I'm calling regarding your outstanding invoice #{{invoiceNumber}} of ${{amount}} that was due on {{dueDate}}. We'd appreciate your prompt payment."
+    message: "Thank you for confirming. I'm calling regarding your outstanding invoice #{{invoiceNumber}} of ${{amount}} that was due on {{dueDate}}. We'd appreciate your prompt payment. Would you like me to help you with payment options?"
+  },
+  {
+    id: "service_followup",
+    name: "Service Follow-up",
+    message: "Excellent! I'm calling to follow up on the {{serviceType}} service we provided on {{serviceDate}}. We'd love to hear your feedback and ensure everything met your expectations. How was your experience?"
   }
 ]
 
@@ -57,12 +59,9 @@ export default function OutboundCallPage() {
   }
 
   const generateScript = () => {
-    if (!openingMessage && !callMessage) return ""
+    if (!callMessage) return ""
     
-    let script = openingMessage
-    if (callMessage) {
-      script += "\n\n" + callMessage
-    }
+    let script = callMessage
 
     // Replace variables in the script
     getAllVariables().forEach(variable => {
@@ -71,6 +70,19 @@ export default function OutboundCallPage() {
     })
 
     return script
+  }
+
+  const generateFullPreview = () => {
+    const callerName = variables['callerName'] || 'Brian'
+    const companyName = variables['companyName'] || 'Skynet'
+    const customerNameVar = variables['customerName'] || customerName || '[Customer Name]'
+    
+    const opening = `Hi, this is ${callerName} from ${companyName}. Am I speaking to ${customerNameVar}?`
+    const message = generateScript()
+    
+    if (!message) return opening
+    
+    return `${opening}\n\n[After customer confirms identity]\n\n${message}`
   }
 
   const handleTemplateChange = (templateId: string) => {
@@ -83,7 +95,6 @@ export default function OutboundCallPage() {
 
     const template = QUICK_TEMPLATES.find(t => t.id === templateId)
     if (template) {
-      setOpeningMessage(template.opening)
       setCallMessage(template.message)
       setSelectedTemplate(templateId)
       setVariables({}) // Reset variables when template changes
@@ -127,7 +138,7 @@ export default function OutboundCallPage() {
   }
 
   const allVariables = getAllVariables()
-  const isFormValid = customerName && customerPhone && (openingMessage || callMessage) && 
+  const isFormValid = customerName && customerPhone && callMessage && 
     allVariables.every(variable => variables[variable])
 
   return (
@@ -189,31 +200,30 @@ export default function OutboundCallPage() {
               </Select>
             </div>
 
-            {/* Opening Message */}
-            <div className="space-y-2">
-              <Label htmlFor="openingMessage">Opening Message</Label>
-              <Textarea
-                id="openingMessage"
-                placeholder="Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?"
-                value={openingMessage}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setOpeningMessage(e.target.value)}
-                rows={3}
-                className="w-full"
-              />
-              <p className="text-xs text-gray-500">Use {"{"}{"{"} variableName {"}"}{"}"}  for dynamic content</p>
-            </div>
-
             {/* Call Message */}
             <div className="space-y-2">
-              <Label htmlFor="callMessage">Call Message</Label>
+              <Label htmlFor="callMessage">Your Message</Label>
               <Textarea
                 id="callMessage"
-                placeholder="The reason for my call is..."
+                placeholder="The reason for my call is to inform you that your package has arrived..."
                 value={callMessage}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCallMessage(e.target.value)}
-                rows={4}
+                rows={5}
                 className="w-full"
               />
+              <p className="text-xs text-gray-500">
+                This message will be delivered AFTER confirming customer identity. Use {"{"}{"{"} variableName {"}"}{"}"}  for dynamic content.
+              </p>
+            </div>
+
+            {/* Info Box */}
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <h4 className="font-medium text-blue-900 mb-2">How This Works:</h4>
+              <ol className="text-sm text-blue-800 space-y-1">
+                <li><strong>1.</strong> AI starts: "Hi, this is Brian from Skynet. Am I speaking to {customerName || '[Customer]'}?"</li>
+                <li><strong>2.</strong> Waits for customer to confirm their identity</li>
+                <li><strong>3.</strong> Only then delivers your message above</li>
+              </ol>
             </div>
 
             {/* Dynamic Variables */}
@@ -242,7 +252,7 @@ export default function OutboundCallPage() {
               <Button
                 onClick={() => setShowPreview(!showPreview)}
                 variant="outline"
-                disabled={!customerName || (!openingMessage && !callMessage)}
+                disabled={!customerName || !callMessage}
                 className="flex-1"
               >
                 <Search className="h-4 w-4 mr-2" />
@@ -279,7 +289,7 @@ export default function OutboundCallPage() {
               <CardContent>
                 <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-400">
                   <p className="text-sm text-blue-800 whitespace-pre-line">
-                    {generateScript() || "Fill in the form to see the generated script"}
+                    {generateFullPreview() || "Fill in the form to see the generated script"}
                   </p>
                 </div>
                 {selectedTemplate && selectedTemplate !== "custom" && (
@@ -325,16 +335,19 @@ export default function OutboundCallPage() {
             </Card>
           )}
 
-          {/* Quick Tips */}
+          {/* Environment Setup */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Quick Tips</CardTitle>
+              <CardTitle className="text-lg">Environment Setup</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-gray-600 space-y-2">
-              <p>• Use the customer's full name for better personalization</p>
-              <p>• Include country code in phone numbers (+1 for US)</p>
-              <p>• Preview the script before making the call</p>
-              <p>• Custom messages allow complete flexibility</p>
+              <p><strong>Required:</strong></p>
+              <p>• VAPI_API_KEY - Your Vapi API key</p>
+              <p>• VAPI_PHONE_NUMBER_ID - Phone number ID</p>
+              <p><strong>Optional:</strong></p>
+              <p>• COMPANY_NAME (default: "Skynet")</p>
+              <p>• CALLER_NAME (default: "Brian")</p>
+              <p>• COMPANY_FILES_ID - Knowledge base file ID</p>
             </CardContent>
           </Card>
         </div>

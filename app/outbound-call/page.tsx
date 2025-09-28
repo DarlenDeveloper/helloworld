@@ -11,75 +11,83 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 
-interface CallReason {
-  id: string
-  name: string
-  template: string
-  variables: string[]
-}
-
-const CALL_REASONS: CallReason[] = [
+// Quick templates for common scenarios (optional)
+const QUICK_TEMPLATES = [
   {
     id: "package_pickup",
-    name: "Package Pickup Notification",
-    template: "to inform you that your package has arrived at our office. You can pick it up during our business hours from 9 AM to 6 PM. Please bring a valid ID for verification.",
-    variables: []
+    name: "Package Pickup",
+    opening: "Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?",
+    message: "Great! The reason for my call is to inform you that your package has arrived at our office. You can pick it up during our business hours from 9 AM to 6 PM."
   },
   {
-    id: "appointment_reminder",
+    id: "appointment_reminder", 
     name: "Appointment Reminder",
-    template: "to remind you about your upcoming appointment scheduled for {{appointmentDate}} at {{appointmentTime}}. Please let me know if you need to reschedule.",
-    variables: ["appointmentDate", "appointmentTime"]
+    opening: "Hello {{customerName}}, this is {{callerName}} from {{companyName}}.",
+    message: "I'm calling to remind you about your upcoming appointment scheduled for {{appointmentDate}} at {{appointmentTime}}. Please let me know if you need to reschedule."
   },
   {
     id: "payment_reminder",
-    name: "Payment Reminder",
-    template: "to remind you about your outstanding invoice #{{invoiceNumber}} of ${{amount}} that was due on {{dueDate}}. We'd appreciate your prompt payment.",
-    variables: ["invoiceNumber", "amount", "dueDate"]
-  },
-  {
-    id: "service_follow_up",
-    name: "Service Follow-up",
-    template: "to follow up on the {{serviceType}} service we provided on {{serviceDate}}. We'd love to hear your feedback and ensure everything met your expectations.",
-    variables: ["serviceType", "serviceDate"]
-  },
-  {
-    id: "custom",
-    name: "Custom Message",
-    template: "{{customMessage}}",
-    variables: ["customMessage"]
+    name: "Payment Reminder", 
+    opening: "Hi {{customerName}}, this is {{callerName}} from {{companyName}}.",
+    message: "I'm calling regarding your outstanding invoice #{{invoiceNumber}} of ${{amount}} that was due on {{dueDate}}. We'd appreciate your prompt payment."
   }
 ]
 
 export default function OutboundCallPage() {
   const [customerName, setCustomerName] = useState("")
   const [customerPhone, setCustomerPhone] = useState("")
-  const [selectedReason, setSelectedReason] = useState<CallReason | null>(null)
+  const [openingMessage, setOpeningMessage] = useState("")
+  const [callMessage, setCallMessage] = useState("")
+  const [selectedTemplate, setSelectedTemplate] = useState("")
   const [variables, setVariables] = useState<Record<string, string>>({})
   const [isCreatingCall, setIsCreatingCall] = useState(false)
   const [callResult, setCallResult] = useState<any>(null)
   const [showPreview, setShowPreview] = useState(false)
 
-  const generateScript = () => {
-    if (!selectedReason || !customerName) return ""
-    
-    let script = `Hi, this is Brian from Skynet. Am I speaking to ${customerName}?
+  // Extract variables from text ({{variableName}})
+  const extractVariables = (text: string): string[] => {
+    const matches = text.match(/\{\{([^}]+)\}\}/g)
+    return matches ? matches.map(match => match.slice(2, -2)) : []
+  }
 
-Great! The reason for my call is ${selectedReason.template}`
+  const getAllVariables = (): string[] => {
+    const openingVars = extractVariables(openingMessage)
+    const messageVars = extractVariables(callMessage)
+    return [...new Set([...openingVars, ...messageVars])]
+  }
+
+  const generateScript = () => {
+    if (!openingMessage && !callMessage) return ""
+    
+    let script = openingMessage
+    if (callMessage) {
+      script += "\n\n" + callMessage
+    }
 
     // Replace variables in the script
-    selectedReason.variables.forEach(variable => {
+    getAllVariables().forEach(variable => {
       const value = variables[variable] || `[${variable}]`
-      script = script.replace(`{{${variable}}}`, value)
+      script = script.replace(new RegExp(`\\{\\{${variable}\\}\\}`, 'g'), value)
     })
 
     return script
   }
 
-  const handleReasonChange = (reasonId: string) => {
-    const reason = CALL_REASONS.find(r => r.id === reasonId)
-    setSelectedReason(reason || null)
-    setVariables({}) // Reset variables when reason changes
+  const handleTemplateChange = (templateId: string) => {
+    if (templateId === "custom") {
+      setOpeningMessage("")
+      setCallMessage("")
+      setSelectedTemplate(templateId)
+      return
+    }
+
+    const template = QUICK_TEMPLATES.find(t => t.id === templateId)
+    if (template) {
+      setOpeningMessage(template.opening)
+      setCallMessage(template.message)
+      setSelectedTemplate(templateId)
+      setVariables({}) // Reset variables when template changes
+    }
   }
 
   const handleVariableChange = (variable: string, value: string) => {
@@ -87,7 +95,7 @@ Great! The reason for my call is ${selectedReason.template}`
   }
 
   const createCall = async () => {
-    if (!customerName || !customerPhone || !selectedReason) return
+    if (!customerName || !customerPhone || (!openingMessage && !callMessage)) return
 
     setIsCreatingCall(true)
     setCallResult(null)
@@ -104,7 +112,7 @@ Great! The reason for my call is ${selectedReason.template}`
           customerName,
           customerPhone,
           script,
-          reason: selectedReason.name
+          reason: selectedTemplate || "Custom Call"
         })
       })
 
@@ -118,8 +126,9 @@ Great! The reason for my call is ${selectedReason.template}`
     }
   }
 
-  const isFormValid = customerName && customerPhone && selectedReason && 
-    selectedReason.variables.every(variable => variables[variable])
+  const allVariables = getAllVariables()
+  const isFormValid = customerName && customerPhone && (openingMessage || callMessage) && 
+    allVariables.every(variable => variables[variable])
 
   return (
     <div className="ml-20 p-6 bg-gray-50 min-h-screen">
@@ -162,39 +171,69 @@ Great! The reason for my call is ${selectedReason.template}`
               />
             </div>
 
-            {/* Call Reason */}
+            {/* Template Selection */}
             <div className="space-y-2">
-              <Label>Call Reason</Label>
-              <Select onValueChange={handleReasonChange}>
+              <Label>Quick Templates (Optional)</Label>
+              <Select onValueChange={handleTemplateChange}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select call reason" />
+                  <SelectValue placeholder="Choose a template or create custom" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CALL_REASONS.map((reason) => (
-                    <SelectItem key={reason.id} value={reason.id}>
-                      {reason.name}
+                  <SelectItem value="custom">Custom Script</SelectItem>
+                  {QUICK_TEMPLATES.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
+            {/* Opening Message */}
+            <div className="space-y-2">
+              <Label htmlFor="openingMessage">Opening Message</Label>
+              <Textarea
+                id="openingMessage"
+                placeholder="Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?"
+                value={openingMessage}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setOpeningMessage(e.target.value)}
+                rows={3}
+                className="w-full"
+              />
+              <p className="text-xs text-gray-500">Use {"{"}{"{"} variableName {"}"}{"}"}  for dynamic content</p>
+            </div>
+
+            {/* Call Message */}
+            <div className="space-y-2">
+              <Label htmlFor="callMessage">Call Message</Label>
+              <Textarea
+                id="callMessage"
+                placeholder="The reason for my call is..."
+                value={callMessage}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCallMessage(e.target.value)}
+                rows={4}
+                className="w-full"
+              />
+            </div>
+
             {/* Dynamic Variables */}
-            {selectedReason && selectedReason.variables.length > 0 && (
+            {allVariables.length > 0 && (
               <div className="space-y-3">
-                <Label>Additional Information</Label>
-                {selectedReason.variables.map((variable) => (
-                  <div key={variable} className="space-y-1">
-                    <Label className="text-sm text-gray-600 capitalize">
-                      {variable.replace(/([A-Z])/g, ' $1').trim()}
-                    </Label>
-                    <Input
-                      placeholder={`Enter ${variable}`}
-                      value={variables[variable] || ''}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleVariableChange(variable, e.target.value)}
-                    />
-                  </div>
-                ))}
+                <Label>Variables Found</Label>
+                <div className="grid grid-cols-1 gap-3">
+                  {allVariables.map((variable) => (
+                    <div key={variable} className="space-y-1">
+                      <Label className="text-sm text-gray-600">
+                        {variable}
+                      </Label>
+                      <Input
+                        placeholder={`Enter ${variable}`}
+                        value={variables[variable] || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleVariableChange(variable, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -203,7 +242,7 @@ Great! The reason for my call is ${selectedReason.template}`
               <Button
                 onClick={() => setShowPreview(!showPreview)}
                 variant="outline"
-                disabled={!customerName || !selectedReason}
+                disabled={!customerName || (!openingMessage && !callMessage)}
                 className="flex-1"
               >
                 <Search className="h-4 w-4 mr-2" />
@@ -243,9 +282,11 @@ Great! The reason for my call is ${selectedReason.template}`
                     {generateScript() || "Fill in the form to see the generated script"}
                   </p>
                 </div>
-                {selectedReason && (
+                {selectedTemplate && selectedTemplate !== "custom" && (
                   <div className="mt-3">
-                    <Badge variant="secondary">{selectedReason.name}</Badge>
+                    <Badge variant="secondary">
+                      {QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name || "Template"}
+                    </Badge>
                   </div>
                 )}
               </CardContent>

@@ -11,34 +11,61 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 
-// Quick templates for common scenarios (optional)
-const QUICK_TEMPLATES = [
+// Opening message templates
+const OPENING_TEMPLATES = [
   {
-    id: "package_pickup",
-    name: "Package Pickup",
-    opening: "Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?",
-    message: "Great! The reason for my call is to inform you that your package has arrived at our office. You can pick it up during our business hours from 9 AM to 6 PM."
+    id: "standard",
+    name: "Standard Greeting",
+    content: "Hi this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?"
   },
   {
-    id: "appointment_reminder", 
+    id: "friendly",
+    name: "Friendly Check-in",
+    content: "Hello {{customerName}}! This is {{callerName}} from {{companyName}}. How are you today?"
+  },
+  {
+    id: "professional",
+    name: "Professional Greeting",
+    content: "Good [morning/afternoon/evening] {{customerName}}, this is {{callerName}} calling from {{companyName}}. How may I assist you today?"
+  }
+];
+
+// Main message templates
+const MESSAGE_TEMPLATES = [
+  {
+    id: "appointment_reminder",
     name: "Appointment Reminder",
-    opening: "Hello {{customerName}}, this is {{callerName}} from {{companyName}}.",
-    message: "I'm calling to remind you about your upcoming appointment scheduled for {{appointmentDate}} at {{appointmentTime}}. Please let me know if you need to reschedule."
+    content: "I'm calling to remind you about your upcoming appointment on {{appointmentDate}} at {{appointmentTime}}. Does that still work for you?"
+  },
+  {
+    id: "package_ready",
+    name: "Package Ready",
+    content: "Great news! Your {{packageType}} is ready for pickup at our {{location}} location. When would you like to come by?"
   },
   {
     id: "payment_reminder",
-    name: "Payment Reminder", 
-    opening: "Hi {{customerName}}, this is {{callerName}} from {{companyName}}.",
-    message: "I'm calling regarding your outstanding invoice #{{invoiceNumber}} of ${{amount}} that was due on {{dueDate}}. We'd appreciate your prompt payment."
+    name: "Payment Reminder",
+    content: "I wanted to remind you about your outstanding balance of {{amount}} for {{invoiceNumber}}. Would you like to take care of that now?"
+  },
+  {
+    id: "follow_up",
+    name: "Follow-up Call",
+    content: "I'm following up on our previous conversation about {{topic}}. Do you have any questions or need further assistance?"
+  },
+  {
+    id: "customer_satisfaction",
+    name: "Satisfaction Check",
+    content: "We value your feedback! How was your recent experience with our {{product/service}}? Is there anything we could do better?"
   }
-]
+];
 
 export default function OutboundCallPage() {
   const [customerName, setCustomerName] = useState("")
   const [customerPhone, setCustomerPhone] = useState("")
   const [openingMessage, setOpeningMessage] = useState("")
   const [callMessage, setCallMessage] = useState("")
-  const [selectedTemplate, setSelectedTemplate] = useState("")
+  const [selectedOpeningTemplate, setSelectedOpeningTemplate] = useState("")
+  const [selectedMessageTemplate, setSelectedMessageTemplate] = useState("")
   const [variables, setVariables] = useState<Record<string, string>>({})
   const [isCreatingCall, setIsCreatingCall] = useState(false)
   const [callResult, setCallResult] = useState<any>(null)
@@ -73,22 +100,47 @@ export default function OutboundCallPage() {
     return script
   }
 
-  const handleTemplateChange = (templateId: string) => {
-    if (templateId === "custom") {
-      setOpeningMessage("")
-      setCallMessage("")
-      setSelectedTemplate(templateId)
-      return
-    }
-
-    const template = QUICK_TEMPLATES.find(t => t.id === templateId)
+  const handleOpeningTemplateSelect = (templateId: string) => {
+    const template = OPENING_TEMPLATES.find(t => t.id === templateId);
     if (template) {
-      setOpeningMessage(template.opening)
-      setCallMessage(template.message)
-      setSelectedTemplate(templateId)
-      setVariables({}) // Reset variables when template changes
+      setOpeningMessage(template.content);
+      setVariables(prev => {
+        const newVars = { ...prev };
+        // Clear only the variables that are no longer in the template
+        extractVariables(template.content).forEach(v => {
+          if (!newVars[v]) newVars[v] = '';
+        });
+        return newVars;
+      });
     }
-  }
+    setSelectedOpeningTemplate(templateId);
+  };
+
+  const handleMessageTemplateSelect = (templateId: string) => {
+    const template = MESSAGE_TEMPLATES.find(t => t.id === templateId);
+    if (template) {
+      setCallMessage(template.content);
+      setVariables(prev => {
+        const newVars = { ...prev };
+        // Clear only the variables that are no longer in the template
+        extractVariables(template.content).forEach(v => {
+          if (!newVars[v]) newVars[v] = '';
+        });
+        return newVars;
+      });
+    }
+    setSelectedMessageTemplate(templateId);
+  };
+
+  const handleCustomMessageChange = (type: 'opening' | 'message', value: string) => {
+    if (type === 'opening') {
+      setOpeningMessage(value);
+      setSelectedOpeningTemplate(value ? '' : 'custom');
+    } else {
+      setCallMessage(value);
+      setSelectedMessageTemplate(value ? '' : 'custom');
+    }
+  };
 
   const handleVariableChange = (variable: string, value: string) => {
     setVariables(prev => ({ ...prev, [variable]: value }))
@@ -112,7 +164,7 @@ export default function OutboundCallPage() {
           customerName,
           customerPhone,
           script,
-          reason: selectedTemplate || "Custom Call"
+          reason: selectedOpeningTemplate || selectedMessageTemplate || "Custom Call"
         })
       })
 
@@ -174,19 +226,47 @@ export default function OutboundCallPage() {
             {/* Template Selection */}
             <div className="space-y-2">
               <Label>Quick Templates (Optional)</Label>
-              <Select onValueChange={handleTemplateChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a template or create custom" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="custom">Custom Script</SelectItem>
-                  {QUICK_TEMPLATES.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
-                      {template.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-1 gap-4">
+                <div className="space-y-2">
+                  <Label>Opening Template</Label>
+                  <Select 
+                    value={selectedOpeningTemplate}
+                    onValueChange={handleOpeningTemplateSelect}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an opening template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Custom Opening</SelectItem>
+                      {OPENING_TEMPLATES.map((template) => (
+                        <SelectItem key={`opening-${template.id}`} value={template.id}>
+                          {template.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Message Template</Label>
+                  <Select 
+                    value={selectedMessageTemplate}
+                    onValueChange={handleMessageTemplateSelect}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a message template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Custom Message</SelectItem>
+                      {MESSAGE_TEMPLATES.map((template) => (
+                        <SelectItem key={`message-${template.id}`} value={template.id}>
+                          {template.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
 
             {/* Opening Message */}
@@ -196,9 +276,9 @@ export default function OutboundCallPage() {
                 id="openingMessage"
                 placeholder="Hi, this is {{callerName}} from {{companyName}}. Am I speaking to {{customerName}}?"
                 value={openingMessage}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setOpeningMessage(e.target.value)}
-                rows={3}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => handleCustomMessageChange('opening', e.target.value)}
                 className="w-full"
+                rows={3}
               />
               <p className="text-xs text-gray-500">Use {"{"}{"{"} variableName {"}"}{"}"}  for dynamic content</p>
             </div>
@@ -210,9 +290,9 @@ export default function OutboundCallPage() {
                 id="callMessage"
                 placeholder="The reason for my call is..."
                 value={callMessage}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCallMessage(e.target.value)}
-                rows={4}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => handleCustomMessageChange('message', e.target.value)}
                 className="w-full"
+                rows={4}
               />
             </div>
 
@@ -282,11 +362,18 @@ export default function OutboundCallPage() {
                     {generateScript() || "Fill in the form to see the generated script"}
                   </p>
                 </div>
-                {selectedTemplate && selectedTemplate !== "custom" && (
-                  <div className="mt-3">
-                    <Badge variant="secondary">
-                      {QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name || "Template"}
-                    </Badge>
+                {(selectedOpeningTemplate || selectedMessageTemplate) && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedOpeningTemplate && (
+                      <Badge variant="secondary">
+                        {OPENING_TEMPLATES.find(t => t.id === selectedOpeningTemplate)?.name || 'Custom Opening'}
+                      </Badge>
+                    )}
+                    {selectedMessageTemplate && (
+                      <Badge variant="outline">
+                        {MESSAGE_TEMPLATES.find(t => t.id === selectedMessageTemplate)?.name || 'Custom Message'}
+                      </Badge>
+                    )}
                   </div>
                 )}
               </CardContent>

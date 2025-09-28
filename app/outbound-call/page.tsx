@@ -218,10 +218,12 @@ export default function OutboundCallPage() {
 
             {/* Info Box */}
             <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-              <h4 className="font-medium text-blue-900 mb-2">Professional Call Flow</h4>
-              <p className="text-sm text-blue-800">
-                Your message will be delivered after identity confirmation for optimal customer experience.
-              </p>
+              <h4 className="font-medium text-blue-900 mb-2">How This Works:</h4>
+              <ol className="text-sm text-blue-800 space-y-1">
+                <li><strong>1.</strong> AI starts: "Hi, this is Brian from Skynet. Am I speaking to {customerName || '[Customer]'}?"</li>
+                <li><strong>2.</strong> Waits for customer to confirm their identity</li>
+                <li><strong>3.</strong> Only then delivers your message above</li>
+              </ol>
             </div>
 
             {/* Dynamic Variables */}
@@ -332,6 +334,22 @@ export default function OutboundCallPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Environment Setup */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Environment Setup</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-gray-600 space-y-2">
+              <p><strong>Required:</strong></p>
+              <p>• VAPI_API_KEY - Your Vapi API key</p>
+              <p>• VAPI_PHONE_NUMBER_ID - Phone number ID</p>
+              <p><strong>Optional:</strong></p>
+              <p>• COMPANY_NAME (default: "Skynet")</p>
+              <p>• CALLER_NAME (default: "Brian")</p>
+              <p>• COMPANY_FILES_ID - Knowledge base file ID</p>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

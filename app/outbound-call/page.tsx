@@ -175,11 +175,12 @@ export default function OutboundCallPage() {
               <Label htmlFor="customerPhone">Customer Phone</Label>
               <Input
                 id="customerPhone"
-                placeholder="+1234567890"
+                placeholder="+256701234567"
                 value={customerPhone}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomerPhone(e.target.value)}
                 className="w-full"
               />
+              <p className="text-xs text-gray-500">Format: +256XXXXXXXXX (Uganda only)</p>
             </div>
 
             {/* Template Selection */}
@@ -341,13 +342,10 @@ export default function OutboundCallPage() {
               <CardTitle className="text-lg">Environment Setup</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-gray-600 space-y-2">
-              <p><strong>Required:</strong></p>
-              <p>• VAPI_API_KEY - Your Vapi API key</p>
-              <p>• VAPI_PHONE_NUMBER_ID - Phone number ID</p>
-              <p><strong>Optional:</strong></p>
-              <p>• COMPANY_NAME (default: "Skynet")</p>
-              <p>• CALLER_NAME (default: "Brian")</p>
-              <p>• COMPANY_FILES_ID - Knowledge base file ID</p>
+              <p>• Use the customer's full name for better personalization</p>
+              <p>• Enter phone numbers in format: +256701234567</p>
+              <p>• Preview the script before making the call</p>
+              <p>• Custom messages allow complete flexibility</p>
             </CardContent>
           </Card>
         </div>

@@ -1,7 +1,40 @@
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-
 import { NextResponse } from "next/server"
+
+// Phone number validation and formatting function for Uganda
+function formatPhoneNumber(phone: string): string | null {
+  // Remove all non-digit characters
+  const digitsOnly = phone.replace(/\D/g, '')
+
+  // Check if it starts with country code
+  if (digitsOnly.length < 10) {
+    return null // Too short
+  }
+
+  // Must start with +256 for Uganda
+  if (phone.startsWith('+256')) {
+    // Validate Ugandan format: +256 followed by 9 digits
+    if (/^\+256[0-9]{9}$/.test(phone)) {
+      return phone
+    }
+  } else if (phone.startsWith('256')) {
+    // Convert 256XXXXXXXXX to +256XXXXXXXXX
+    if (/^256[0-9]{9}$/.test(phone)) {
+      return '+' + phone
+    }
+  } else if (phone.startsWith('0')) {
+    // Convert 0XXXXXXXXX to +256XXXXXXXXX (remove leading 0, add +256)
+    if (/^0[0-9]{9}$/.test(phone)) {
+      return '+256' + phone.substring(1)
+    }
+  } else {
+    // Check if it's 9 digits (Ugandan number without country code)
+    if (/^[0-9]{9}$/.test(phone)) {
+      return '+256' + phone
+    }
+  }
+
+  return null
+}
 
 export async function POST(req: Request) {
   console.log('Create single call endpoint called')
@@ -14,6 +47,15 @@ export async function POST(req: Request) {
       return NextResponse.json({
         success: false,
         error: "Missing required fields: customerName, customerPhone, or script"
+      }, { status: 400 })
+    }
+
+    // Validate and format phone number
+    const formattedPhone = formatPhoneNumber(customerPhone)
+    if (!formattedPhone) {
+      return NextResponse.json({
+        success: false,
+        error: "Invalid phone number format. Please use Ugandan format: +256XXXXXXXXX"
       }, { status: 400 })
     }
 
@@ -66,7 +108,7 @@ COMPANY INFO:
       assistantId: assistantId,
       phoneNumberId: phoneNumberId,
       customer: {
-        number: customerPhone,
+        number: formattedPhone, // Use formatted phone number
         name: customerName
       },
       assistantOverrides: {
@@ -119,8 +161,10 @@ COMPANY INFO:
       errorMessage = "Invalid Vapi API key. Please check your VAPI_API_KEY environment variable."
     } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
       errorMessage = "Access denied. Please check your Vapi API permissions."
-    } else if (errorMessage.includes('400')) {
-      errorMessage = "Invalid request data. Please check the customer phone number format."
+    } else if (errorMessage.includes('400') || errorMessage.includes('Bad Request')) {
+      errorMessage = "Invalid request data. Please check the customer phone number format. Use: +256XXXXXXXXX"
+    } else if (errorMessage.includes('phone') || errorMessage.includes('number')) {
+      errorMessage = "Invalid phone number format. Please use Ugandan format: +256XXXXXXXXX"
     }
 
     return NextResponse.json({

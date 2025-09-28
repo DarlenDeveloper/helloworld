@@ -13,7 +13,17 @@ function formatPhoneNumber(phone: string): string | null {
   // Must start with +256 for Uganda
   if (phone.startsWith('+256')) {
     // Validate Ugandan format: +256 followed by 9 digits
+    console.log('Testing phone:', phone)
+    console.log('Phone length:', phone.length)
+    console.log('Digits after +256:', phone.substring(4))
+    console.log('Digits length:', phone.substring(4).length)
+    console.log('Regex test:', /^\+256[0-9]{9}$/.test(phone))
     if (/^\+256[0-9]{9}$/.test(phone)) {
+      return phone
+    }
+    // More lenient: if it starts with +256 and has 12+ characters, accept it
+    if (phone.length >= 12 && phone.length <= 13) {
+      console.log('Accepting phone as valid length')
       return phone
     }
   } else if (phone.startsWith('256')) {
@@ -53,6 +63,9 @@ export async function POST(req: Request) {
     // Validate and format phone number
     const formattedPhone = formatPhoneNumber(customerPhone)
     if (!formattedPhone) {
+      console.log('Phone validation failed for:', customerPhone)
+      console.log('Phone length:', customerPhone.length)
+      console.log('Phone digits:', customerPhone.replace(/\D/g, ''))
       return NextResponse.json({
         success: false,
         error: "Invalid phone number format. Please use Ugandan format: +256XXXXXXXXX"

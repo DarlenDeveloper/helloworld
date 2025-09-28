@@ -41,7 +41,8 @@ export default function OutboundCallPage() {
   const [openingMessage, setOpeningMessage] = useState("")
   const [callMessage, setCallMessage] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState("")
-  const [variables, setVariables] = useState<Record<string, string>>({})
+  const [selectedOptionalFields, setSelectedOptionalFields] = useState<string[]>([])
+  const [customVariables, setCustomVariables] = useState<Record<string, string>>({})
   const [isCreatingCall, setIsCreatingCall] = useState(false)
   const [callResult, setCallResult] = useState<any>(null)
   const [showPreview, setShowPreview] = useState(false)
@@ -65,7 +66,7 @@ export default function OutboundCallPage() {
 
     // Replace variables in the script
     getAllVariables().forEach(variable => {
-      const value = variables[variable] || `[${variable}]`
+      const value = customVariables[variable] || `[${variable}]`
       script = script.replace(new RegExp(`\\{\\{${variable}\\}\\}`, 'g'), value)
     })
 
@@ -73,9 +74,9 @@ export default function OutboundCallPage() {
   }
 
   const generateFullPreview = () => {
-    const callerName = variables['callerName'] || 'Brian'
-    const companyName = variables['companyName'] || 'Skynet'
-    const customerNameVar = variables['customerName'] || customerName || '[Customer Name]'
+    const callerName = customVariables['callerName'] || 'Brian'
+    const companyName = customVariables['companyName'] || 'Skynet'
+    const customerNameVar = customVariables['customerName'] || customerName || '[Customer Name]'
     
     const opening = `Hi, this is ${callerName} from ${companyName}. Am I speaking to ${customerNameVar}?`
     const message = generateScript()
@@ -97,12 +98,33 @@ export default function OutboundCallPage() {
     if (template) {
       setCallMessage(template.message)
       setSelectedTemplate(templateId)
-      setVariables({}) // Reset variables when template changes
+      setSelectedOptionalFields([])
+      setCustomVariables({})
     }
   }
 
-  const handleVariableChange = (variable: string, value: string) => {
-    setVariables(prev => ({ ...prev, [variable]: value }))
+  const insertVariableIntoMessage = (field: string) => {
+    const variable = `{{${field}}}`
+    const textarea = document.getElementById('callMessage') as HTMLTextAreaElement
+    if (textarea) {
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const text = textarea.value
+      const before = text.substring(0, start)
+      const after = text.substring(end, text.length)
+      setCallMessage(before + variable + after)
+      
+      // Focus back to textarea
+      setTimeout(() => {
+        textarea.focus()
+        const newPosition = start + variable.length
+        textarea.setSelectionRange(newPosition, newPosition)
+      }, 0)
+    }
+  }
+
+  const handleCustomVariableChange = (variable: string, value: string) => {
+    setCustomVariables(prev => ({ ...prev, [variable]: value }))
   }
 
   const createCall = async () => {
@@ -139,7 +161,7 @@ export default function OutboundCallPage() {
 
   const allVariables = getAllVariables()
   const isFormValid = customerName && customerPhone && callMessage && 
-    allVariables.every(variable => variables[variable])
+    allVariables.every(variable => customVariables[variable])
 
   return (
     <div className="ml-20 p-6 bg-gray-50 min-h-screen">
@@ -200,20 +222,33 @@ export default function OutboundCallPage() {
               </Select>
             </div>
 
-            {/* Call Message */}
+            {/* Optional Fields Selection */}
             <div className="space-y-2">
-              <Label htmlFor="callMessage">Your Message</Label>
-              <Textarea
-                id="callMessage"
-                placeholder="The reason for my call is to inform you that your package has arrived..."
-                value={callMessage}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCallMessage(e.target.value)}
-                rows={5}
-                className="w-full"
-              />
-              <p className="text-xs text-gray-500">
-                This message will be delivered AFTER confirming customer identity. Use {"{"}{"{"} variableName {"}"}{"}"}  for dynamic content.
-              </p>
+              <Label>Optional Fields</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  'appointmentDate',
+                  'appointmentTime',
+                  'invoiceNumber',
+                  'amount',
+                  'serviceType',
+                  'serviceDate',
+                  'dueDate',
+                  'packageId'
+                ].map((field) => (
+                  <Button
+                    key={field}
+                    type="button"
+                    variant={selectedOptionalFields.includes(field) ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => insertVariableIntoMessage(field)}
+                    className="justify-start text-xs"
+                  >
+                    {`{{${field}}}`}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500">Click to add optional fields to your message</p>
             </div>
 
             {/* Info Box */}
@@ -227,17 +262,17 @@ export default function OutboundCallPage() {
             {/* Dynamic Variables */}
             {allVariables.length > 0 && (
               <div className="space-y-3">
-                <Label>Variables Found</Label>
+                <Label>Fill in Variables</Label>
                 <div className="grid grid-cols-1 gap-3">
                   {allVariables.map((variable) => (
                     <div key={variable} className="space-y-1">
                       <Label className="text-sm text-gray-600">
-                        {variable}
+                        {variable.replace(/([A-Z])/g, ' $1').trim()}
                       </Label>
                       <Input
                         placeholder={`Enter ${variable}`}
-                        value={variables[variable] || ''}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleVariableChange(variable, e.target.value)}
+                        value={customVariables[variable] || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleCustomVariableChange(variable, e.target.value)}
                       />
                     </div>
                   ))}

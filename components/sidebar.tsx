@@ -30,6 +30,7 @@ export function Sidebar() {
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
     { icon: FileText, href: "/batches", label: "Batches", active: pathname?.startsWith("/batches") },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
+    { icon: Phone, href: "/outbound-call", label: "Outbound Call", active: pathname === "/outbound-call" },
     { icon: MessageCircle, href: "/scheduling/whatsapp", label: "WhatsApp Scheduling", active: pathname === "/scheduling/whatsapp" },
     { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },
     { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },

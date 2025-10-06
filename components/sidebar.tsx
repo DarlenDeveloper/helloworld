@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect } from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, DollarSign, History, FileText, FormInput, Bell, Users, ChevronsLeft, ChevronsRight, MessageCircle, Mail } from "lucide-react"
+import { LayoutGrid, Phone, BarChart3, Brain, Settings, BarChart, History, FileText, FormInput, Users, ChevronsLeft, ChevronsRight } from "lucide-react"
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -31,18 +31,14 @@ export function Sidebar() {
     { icon: FileText, href: "/batches", label: "Batches", active: pathname?.startsWith("/batches") },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
     { icon: Phone, href: "/outbound-call", label: "Outbound Call", active: pathname === "/outbound-call" },
-    { icon: MessageCircle, href: "/scheduling/whatsapp", label: "WhatsApp Scheduling", active: pathname === "/scheduling/whatsapp" },
-    { icon: Mail, href: "/scheduling/email", label: "Email Scheduling", active: pathname === "/scheduling/email" },
-    { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
+            { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
     { icon: Brain, href: "/deep-insights", label: "Deep Insights", active: pathname === "/deep-insights" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
     { icon: FormInput, href: "/forms/contact", label: "Web Forms", active: pathname === "/forms/contact" },
     { icon: Users, href: "/users", label: "Users", active: pathname === "/users" },
-    { icon: Bell, href: "/notifications", label: "Notifications", active: pathname === "/notifications" },
-    { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
-    { icon: DollarSign, href: "/billing", label: "Billing", active: pathname === "/billing" },
-    { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
+        { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
+        { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
   ]
 
   const handleSidebarClick = (e: React.MouseEvent) => {

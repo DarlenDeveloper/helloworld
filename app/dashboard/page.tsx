@@ -125,16 +125,7 @@ export default function Dashboard() {
   const supabase = createClient()
 
   useEffect(() => {
-    let callsSub: RealtimeChannel | null = null
-    let historySub: RealtimeChannel | null = null
-    let debounceTimer: NodeJS.Timeout | null = null
-
-    const debouncedFetchData = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        fetchData(currentUserId || undefined)
-      }, 500) // Debounce real-time updates by 500ms
-    }
+    let pollInterval: NodeJS.Timeout | null = null
 
     const init = async () => {
       try {
@@ -149,11 +140,12 @@ export default function Dashboard() {
         setCurrentUserId(user.id)
         await fetchData(user.id)
 
-        // Only subscribe to essential updates
-        callsSub = supabase
-          .channel('calls-changes')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, debouncedFetchData)
-          .subscribe()
+        // Replace realtime subscription with periodic polling for Vapi data
+        pollInterval = setInterval(() => {
+          if (user.id) {
+            fetchData(user.id)
+          }
+        }, 30000) // Poll every 30 seconds
       } catch (error) {
         console.error("Dashboard initialization error:", error)
       } finally {
@@ -164,11 +156,157 @@ export default function Dashboard() {
     init()
     
     return () => {
-      if (callsSub) supabase.removeChannel(callsSub)
-      if (historySub) supabase.removeChannel(historySub)
-      if (debounceTimer) clearTimeout(debounceTimer)
+      if (pollInterval) clearInterval(pollInterval)
     }
   }, [router, supabase])
+
+  // Helper function to map Vapi call status to our internal status
+  const mapVapiStatus = (vapiStatus: string): 'completed' | 'missed' | 'in_progress' => {
+    switch (vapiStatus?.toLowerCase()) {
+      case 'ended':
+        return 'completed'
+      case 'queued':
+      case 'ringing':
+      case 'in-progress':
+      case 'forwarding':
+        return 'in_progress'
+      default:
+        return 'missed'
+    }
+  }
+
+  // Helper function to transform Vapi calls to our Call interface
+  const transformVapiCalls = (vapiCalls: any[]): Call[] => {
+    console.log('Transforming Vapi calls:', vapiCalls.length)
+    return vapiCalls.slice(0, 10).map((vapiCall: any) => {
+      console.log('Processing call:', vapiCall.id, 'Status:', vapiCall.status)
+      return {
+        id: vapiCall.id || '',
+        user_id: 'vapi', // Not applicable for Vapi calls
+        customer_name: vapiCall.customer?.name || vapiCall.customerName || 'Unknown',
+        customer_phone: vapiCall.customer?.number || vapiCall.phoneNumber || vapiCall.toNumber || '',
+        call_type: vapiCall.type === 'inbound' ? 'inbound' : 'outbound', // Use actual call type
+        status: mapVapiStatus(vapiCall.status),
+        duration: vapiCall.duration || 0,
+        notes: vapiCall.summary || vapiCall.transcript || '',
+        created_at: vapiCall.createdAt || vapiCall.startedAt || new Date().toISOString(),
+        updated_at: vapiCall.updatedAt || vapiCall.endedAt || new Date().toISOString()
+      }
+    })
+  }
+
+  // Helper function to calculate call stats from Vapi calls
+  const calculateCallStatsFromVapi = (vapiCalls: any[]) => {
+    const outboundCalls = vapiCalls.filter(call => call.type !== 'inbound') // Most Vapi calls are outbound
+    const inboundCalls = vapiCalls.filter(call => call.type === 'inbound')
+
+    const outboundStatuses = outboundCalls.map(call => mapVapiStatus(call.status))
+    const inboundStatuses = inboundCalls.map(call => mapVapiStatus(call.status))
+
+    const stats: CallStats = {
+      inbound: {
+        resolved: inboundStatuses.filter(s => s === 'completed').length,
+        notResolved: inboundStatuses.filter(s => s === 'missed').length,
+        forwarded: inboundStatuses.filter(s => s === 'in_progress').length
+      },
+      outbound: {
+        followUp: outboundStatuses.filter(s => s === 'completed').length,
+        notInterested: outboundStatuses.filter(s => s === 'missed').length,
+        notAnswered: outboundStatuses.filter(s => s === 'in_progress').length
+      }
+    }
+    setCallStats(stats)
+  }
+
+  // Helper function to calculate call metrics from Vapi calls
+  const calculateCallMetricsFromVapi = (vapiCalls: any[]) => {
+    const totalPackageMinutes = 5000
+    const usedMinutes = vapiCalls.reduce((total: number, call) => {
+      const duration = call.duration || 0
+      return total + (duration / 60) // Convert seconds to minutes
+    }, 0)
+    
+    const remaining = Math.max(0, totalPackageMinutes - usedMinutes)
+    const percentRemaining = Math.round((remaining / totalPackageMinutes) * 100)
+    const totalCalls = vapiCalls.length || 1
+    const avgDuration = vapiCalls.length ? Math.round((usedMinutes / totalCalls) * 10) / 10 : 0
+    const avgChangePercent = 12
+
+    setCallMetrics({
+      totalMinutes: totalPackageMinutes,
+      remainingMinutes: Math.round(remaining),
+      percentRemaining,
+      avgDuration,
+      avgChangePercent
+    })
+  }
+
+  // Helper function to extract talking points from Vapi call analysis data
+  const calculateTalkingPointsFromVapi = (vapiCalls: any[]) => {
+    console.log('Calculating talking points from', vapiCalls.length, 'calls')
+    const talkingPointsMap = new Map<string, number>()
+    
+    // Extract talking points from each call's data section
+    vapiCalls.forEach((call, index) => {
+      console.log(`Call ${index + 1}:`, call.id)
+      
+      // Check multiple possible locations for the data
+      const data = call.data || call.analysis || call.analysisData
+      console.log('Data found:', !!data)
+      
+      if (data && data.talking_points && Array.isArray(data.talking_points)) {
+        console.log('Talking points found:', data.talking_points.length)
+        data.talking_points.forEach((tp: any) => {
+          const name = tp.talking_point_name || tp.name || tp.label
+          console.log('Processing talking point:', name)
+          
+          // Accept any talking point name, including "Undetermined"
+          if (name) {
+            talkingPointsMap.set(name, (talkingPointsMap.get(name) || 0) + 1)
+          }
+        })
+      } else {
+        console.log('No talking points found in call', call.id)
+      }
+    })
+
+    console.log('Final talking points map:', Array.from(talkingPointsMap.entries()))
+
+    if (talkingPointsMap.size === 0) {
+      console.log('No talking points found, setting empty array')
+      setTalkingPoints([])
+      return
+    }
+
+    // Convert to array and sort by frequency
+    const sortedPoints = Array.from(talkingPointsMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6) // Take top 6 talking points
+
+    // Calculate total for percentage calculation
+    const total = sortedPoints.reduce((sum, [, count]) => sum + count, 0)
+    
+    // Define unique colors for each category
+    const colors = [
+      "#14b8a6", // teal
+      "#3b82f6", // blue
+      "#f59e0b", // amber
+      "#ef4444", // red
+      "#8b5cf6", // violet
+      "#06b6d4", // cyan
+    ]
+
+    // Create talking points with colors and percentages
+    const points = sortedPoints.map(([name, count], index) => ({
+      label: name.charAt(0).toUpperCase() + name.slice(1).toLowerCase(),
+      percent: Math.round((count / total) * 100),
+      color: `bg-[${colors[index % colors.length]}]`,
+      hexColor: colors[index % colors.length]
+    }))
+
+    console.log('Final talking points:', points)
+    setTalkingPoints(points)
+  }
 
   const fetchData = async (uid?: string) => {
     try {
@@ -192,24 +330,12 @@ export default function Dashboard() {
         if (oid && !owners.includes(oid)) owners.push(oid)
       })
 
-      // Use Promise.allSettled for parallel requests scoped to current user
+      // Use Promise.allSettled for parallel requests
       const results = await Promise.allSettled([
-        // Fetch recent calls with minimal data
-        supabase
-          .from("calls")
-          .select("id, customer_name, customer_phone, call_type, status, duration, notes, created_at")
-          .in("user_id", owners)
-          .order("created_at", { ascending: false })
-          .limit(10),
+        // NEW: Fetch calls from Vapi API
+        fetch('/api/vapi/calls').then(res => res.json()),
         
-        // Fetch call stats in single optimized query
-        supabase
-          .from("calls")
-          .select("call_type, status")
-          .in("user_id", owners)
-          .limit(1000), // Reasonable limit for stats
-        
-        // Fetch campaigns with minimal data
+        // KEEP: Fetch campaigns from Supabase
         supabase
           .from("campaigns")
           .select("id, name, status, target_contacts, completed_calls, success_rate, created_at")
@@ -217,57 +343,51 @@ export default function Dashboard() {
           .order("created_at", { ascending: false })
           .limit(50),
         
-        // Fetch call history summary data only
-        supabase
-          .from("call_history")
-          .select("duration, cost, ai_summary, notes, call_date")
-          .in("user_id", owners)
-          .order("call_date", { ascending: false })
-          .limit(500), // Limit for performance
-        
-        // Fetch talking points events data
-        supabase
-          .from("talking_points_events")
-          .select("id, category_id, text, created_at")
-          .in("user_id", owners)
-          .order("created_at", { ascending: false })
-          .limit(1000)
+        // SKIP: talking points events (as requested)
+        Promise.resolve({ data: [] })
       ])
 
-      // Handle calls data
-      if (results[0].status === 'fulfilled' && !results[0].value.error) {
-        setCalls((results[0].value.data as Call[]) || [])
+      // Handle Vapi calls data
+      if (results[0].status === 'fulfilled' && results[0].value.success) {
+        const vapiCalls = results[0].value.data || []
+        console.log('Vapi calls received:', vapiCalls.length)
+        
+        // Transform and set calls data
+        setCalls(transformVapiCalls(vapiCalls))
+        
+        // Calculate stats and metrics from Vapi data
+        calculateCallStatsFromVapi(vapiCalls)
+        calculateCallMetricsFromVapi(vapiCalls)
+        
+        // Calculate talking points from Vapi analysis data
+        calculateTalkingPointsFromVapi(vapiCalls)
+      } else if (results[0].status === 'fulfilled') {
+        console.error('Vapi API error:', results[0].value.error)
+        // Set empty data on API error
+        setCalls([])
+        setCallStats({
+          inbound: { resolved: 0, notResolved: 0, forwarded: 0 },
+          outbound: { followUp: 0, notInterested: 0, notAnswered: 0 }
+        })
+        setCallMetrics({
+          totalMinutes: 5000,
+          remainingMinutes: 5000,
+          percentRemaining: 100,
+          avgDuration: 0,
+          avgChangePercent: 0
+        })
+        setTalkingPoints([])
       }
 
-      // Handle call stats
+      // Handle campaigns (keep existing Supabase logic)
       if (results[1].status === 'fulfilled' && !results[1].value.error) {
-        const callStatsData = results[1].value.data || []
-        const inboundStatuses = callStatsData.filter((r: any) => r.call_type === 'inbound').map((r: any) => r.status)
-        const outboundStatuses = callStatsData.filter((r: any) => r.call_type === 'outbound').map((r: any) => r.status)
-        calculateCallStats(inboundStatuses, outboundStatuses)
-      }
-
-      // Handle campaigns
-      if (results[2].status === 'fulfilled' && !results[2].value.error) {
-        setCampaigns((results[2].value.data as Campaign[]) || [])
-      }
-
-      // Handle call history
-      if (results[3].status === 'fulfilled' && !results[3].value.error) {
-        const historyData = results[3].value.data as CallHistory[] || []
-        calculateCallMetrics(historyData)
-      }
-
-      // Handle talking points events
-      if (results[4].status === 'fulfilled' && !results[4].value.error) {
-        const talkingPointsData = results[4].value.data as any[] || []
-        calculateTalkingPointsFromEvents(talkingPointsData)
+        setCampaigns((results[1].value.data as Campaign[]) || [])
       }
 
       // Log any failed requests
       results.forEach((result, index) => {
         if (result.status === 'rejected') {
-          console.error(`Database query ${index + 1} failed:`, result.reason)
+          console.error(`API request ${index + 1} failed:`, result.reason)
         }
       })
 
@@ -421,6 +541,14 @@ export default function Dashboard() {
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl text-black text-justify font-black">Dashboard</h1>
         <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchData(currentUserId || undefined)}
+            className="border-gray-200 text-black hover:bg-gray-50"
+          >
+            Refresh
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -608,7 +736,7 @@ export default function Dashboard() {
             </Select>
           </CardHeader>
           <CardContent>
-            <AgentPerformanceChart />
+            <AgentPerformanceChart calls={calls} />
           </CardContent>
         </Card>
 

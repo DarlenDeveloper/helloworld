@@ -1,8 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
 import { Bar, XAxis, YAxis, ResponsiveContainer, Line, ComposedChart, Tooltip } from "recharts"
-import { createClient } from "@/lib/supabase/client"
 
 // Recharts type compatibility shim for React 19/TS 5
 // Avoid TS errors about JSX element class not supporting attributes
@@ -17,11 +16,18 @@ interface Point {
   line: number
 }
 
-export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPeriod }) {
-  const [data, setData] = useState<Point[]>([])
-  const [loading, setLoading] = useState(true)
-  const supabase = createClient()
+interface Call {
+  id: string
+  created_at: string
+}
 
+export function AgentPerformanceChart({ 
+  period = "weekly", 
+  calls = [] 
+}: { 
+  period?: CallsPeriod
+  calls?: Call[]
+}) {
   const labels = useMemo(() => {
     const now = new Date()
     if (period === "weekly") {
@@ -45,95 +51,45 @@ export function AgentPerformanceChart({ period = "weekly" }: { period?: CallsPer
     }
   }, [period])
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true)
-      try {
-        // Compute start date based on period
-        const now = new Date()
-        let start: Date
-        if (period === "weekly") {
-          start = new Date(now)
-          start.setDate(now.getDate() - 6)
-          start.setHours(0, 0, 0, 0)
-        } else {
-          start = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0)
-        }
-
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) { setData([]); setLoading(false); return }
-
-        // Resolve owners set (self + owners where I'm an active member)
-        const owners: string[] = [user.id]
-        const { data: memberships } = await supabase
-          .from("account_users")
-          .select("owner_user_id, is_active")
-          .eq("member_user_id", user.id)
-          .eq("is_active", true)
-        ;(memberships || []).forEach((m: any) => {
-          const oid = String(m?.owner_user_id || "")
-          if (oid && !owners.includes(oid)) owners.push(oid)
-        })
-
-        const { data: rows, error } = await supabase
-          .from("calls")
-          .select("created_at")
-          .in("user_id", owners)
-          .gte("created_at", start.toISOString())
-
-        if (error) throw error
-
-        if (period === "weekly") {
-          const buckets = new Array(7).fill(0)
-          ;(rows || []).forEach((r: any) => {
-            const d = new Date(r.created_at)
-            const startDay = new Date(start)
-            const msPerDay = 24 * 3600 * 1000
-            const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-            const offset = Math.floor((dayStart.getTime() - startDay.getTime()) / msPerDay)
-            if (offset >= 0 && offset < 7) buckets[offset] += 1
-          })
-          const points: Point[] = buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
-          setData(points)
-        } else {
-          const buckets = new Array(12).fill(0)
-          ;(rows || []).forEach((r: any) => {
-            const d = new Date(r.created_at)
-            const monthsDiff = (d.getFullYear() - start.getFullYear()) * 12 + (d.getMonth() - start.getMonth())
-            if (monthsDiff >= 0 && monthsDiff < 12) buckets[monthsDiff] += 1
-          })
-          const points: Point[] = buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
-          setData(points)
-        }
-      } catch (e) {
-        console.error("Failed to fetch calls data:", e)
-        setData([])
-      } finally {
-        setLoading(false)
-      }
+  const data = useMemo(() => {
+    // Compute start date based on period
+    const now = new Date()
+    let start: Date
+    if (period === "weekly") {
+      start = new Date(now)
+      start.setDate(now.getDate() - 6)
+      start.setHours(0, 0, 0, 0)
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0)
     }
 
-    fetchData()
+    // Filter calls within the time range
+    const filteredCalls = calls.filter(call => {
+      const callDate = new Date(call.created_at)
+      return callDate >= start
+    })
 
-    const channel = supabase
-      .channel("calls-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
-        fetchData()
+    if (period === "weekly") {
+      const buckets = new Array(7).fill(0)
+      filteredCalls.forEach((call) => {
+        const d = new Date(call.created_at)
+        const startDay = new Date(start)
+        const msPerDay = 24 * 3600 * 1000
+        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+        const offset = Math.floor((dayStart.getTime() - startDay.getTime()) / msPerDay)
+        if (offset >= 0 && offset < 7) buckets[offset] += 1
       })
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
+      return buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
+    } else {
+      const buckets = new Array(12).fill(0)
+      filteredCalls.forEach((call) => {
+        const d = new Date(call.created_at)
+        const monthsDiff = (d.getFullYear() - start.getFullYear()) * 12 + (d.getMonth() - start.getMonth())
+        if (monthsDiff >= 0 && monthsDiff < 12) buckets[monthsDiff] += 1
+      })
+      return buckets.map((n, idx) => ({ label: labels[idx], count: n, line: n }))
     }
-  }, [supabase, period, labels])
-
-  if (loading) {
-    return (
-      <div className="h-64 flex items-center justify-center">
-        <div className="animate-pulse h-40 w-full bg-gray-200 rounded"></div>
-      </div>
-    )
-  }
+  }, [calls, period, labels])
 
   return (
     <div className="h-64">

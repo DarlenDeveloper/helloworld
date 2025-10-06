@@ -74,14 +74,14 @@ interface CallHistory {
 
 interface CallStats {
   inbound: {
-    resolved: number
-    notResolved: number
-    forwarded: number
+    completed: number
+    missed: number
+    inProgress: number
   }
   outbound: {
-    followUp: number
-    notInterested: number
-    notAnswered: number
+    completed: number
+    missed: number
+    inProgress: number
   }
 }
 
@@ -109,8 +109,8 @@ export default function Dashboard() {
   const [calls, setCalls] = useState<Call[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [callStats, setCallStats] = useState<CallStats>({
-    inbound: { resolved: 0, notResolved: 0, forwarded: 0 },
-    outbound: { followUp: 0, notInterested: 0, notAnswered: 0 }
+    inbound: { completed: 0, missed: 0, inProgress: 0 },
+    outbound: { completed: 0, missed: 0, inProgress: 0 }
   })
   const [callMetrics, setCallMetrics] = useState<CallMetrics>({
     totalMinutes: 0,
@@ -197,24 +197,37 @@ export default function Dashboard() {
 
   // Helper function to calculate call stats from Vapi calls
   const calculateCallStatsFromVapi = (vapiCalls: any[]) => {
-    const outboundCalls = vapiCalls.filter(call => call.type !== 'inbound') // Most Vapi calls are outbound
-    const inboundCalls = vapiCalls.filter(call => call.type === 'inbound')
+    console.log('Calculating call stats from Vapi calls:', vapiCalls.length)
+    
+    // Filter calls by type - check both 'type' and 'call_type' properties
+    const outboundCalls = vapiCalls.filter(call => 
+      call.type === 'outbound' || call.call_type === 'outbound' || 
+      (call.type !== 'inbound' && call.call_type !== 'inbound')
+    )
+    const inboundCalls = vapiCalls.filter(call => 
+      call.type === 'inbound' || call.call_type === 'inbound'
+    )
+
+    console.log('Outbound calls:', outboundCalls.length)
+    console.log('Inbound calls:', inboundCalls.length)
 
     const outboundStatuses = outboundCalls.map(call => mapVapiStatus(call.status))
     const inboundStatuses = inboundCalls.map(call => mapVapiStatus(call.status))
 
     const stats: CallStats = {
       inbound: {
-        resolved: inboundStatuses.filter(s => s === 'completed').length,
-        notResolved: inboundStatuses.filter(s => s === 'missed').length,
-        forwarded: inboundStatuses.filter(s => s === 'in_progress').length
+        completed: inboundStatuses.filter(s => s === 'completed').length,
+        missed: inboundStatuses.filter(s => s === 'missed').length,
+        inProgress: inboundStatuses.filter(s => s === 'in_progress').length
       },
       outbound: {
-        followUp: outboundStatuses.filter(s => s === 'completed').length,
-        notInterested: outboundStatuses.filter(s => s === 'missed').length,
-        notAnswered: outboundStatuses.filter(s => s === 'in_progress').length
+        completed: outboundStatuses.filter(s => s === 'completed').length,
+        missed: outboundStatuses.filter(s => s === 'missed').length,
+        inProgress: outboundStatuses.filter(s => s === 'in_progress').length
       }
     }
+    
+    console.log('Final call stats:', stats)
     setCallStats(stats)
   }
 
@@ -343,8 +356,13 @@ export default function Dashboard() {
           .order("created_at", { ascending: false })
           .limit(50),
         
-        // SKIP: talking points events (as requested)
-        Promise.resolve({ data: [] })
+        // KEEP: Fetch talking points from Supabase (as requested)
+        supabase
+          .from("talking_points_events")
+          .select("text, created_at")
+          .in("user_id", owners)
+          .order("created_at", { ascending: false })
+          .limit(100)
       ])
 
       // Handle Vapi calls data
@@ -358,16 +376,13 @@ export default function Dashboard() {
         // Calculate stats and metrics from Vapi data
         calculateCallStatsFromVapi(vapiCalls)
         calculateCallMetricsFromVapi(vapiCalls)
-        
-        // Calculate talking points from Vapi analysis data
-        calculateTalkingPointsFromVapi(vapiCalls)
       } else if (results[0].status === 'fulfilled') {
         console.error('Vapi API error:', results[0].value.error)
         // Set empty data on API error
         setCalls([])
         setCallStats({
-          inbound: { resolved: 0, notResolved: 0, forwarded: 0 },
-          outbound: { followUp: 0, notInterested: 0, notAnswered: 0 }
+          inbound: { completed: 0, missed: 0, inProgress: 0 },
+          outbound: { completed: 0, missed: 0, inProgress: 0 }
         })
         setCallMetrics({
           totalMinutes: 5000,
@@ -376,12 +391,18 @@ export default function Dashboard() {
           avgDuration: 0,
           avgChangePercent: 0
         })
-        setTalkingPoints([])
       }
 
       // Handle campaigns (keep existing Supabase logic)
       if (results[1].status === 'fulfilled' && !results[1].value.error) {
         setCampaigns((results[1].value.data as Campaign[]) || [])
+      }
+
+      // Handle talking points from Supabase (as requested)
+      if (results[2].status === 'fulfilled' && !results[2].value.error) {
+        calculateTalkingPointsFromEvents((results[2].value.data as any[]) || [])
+      } else {
+        setTalkingPoints([])
       }
 
       // Log any failed requests
@@ -498,42 +519,28 @@ export default function Dashboard() {
   }
 
   // Derived totals and percentages for circular charts
-  const inboundTotal = callStats.inbound.resolved + callStats.inbound.notResolved + callStats.inbound.forwarded
-  const outboundTotal = callStats.outbound.followUp + callStats.outbound.notInterested + callStats.outbound.notAnswered
+  const inboundTotal = callStats.inbound.completed + callStats.inbound.missed + callStats.inbound.inProgress
+  const outboundTotal = callStats.outbound.completed + callStats.outbound.missed + callStats.outbound.inProgress
 
-  const inResolvedPct = inboundTotal ? Math.round((callStats.inbound.resolved / inboundTotal) * 100) : 0
-  const inNotResolvedPct = inboundTotal ? Math.round((callStats.inbound.notResolved / inboundTotal) * 100) : 0
-  const inForwardedPct = inboundTotal ? Math.round((callStats.inbound.forwarded / inboundTotal) * 100) : 0
+  const inCompletedPct = inboundTotal ? Math.round((callStats.inbound.completed / inboundTotal) * 100) : 0
+  const inMissedPct = inboundTotal ? Math.round((callStats.inbound.missed / inboundTotal) * 100) : 0
+  const inInProgressPct = inboundTotal ? Math.round((callStats.inbound.inProgress / inboundTotal) * 100) : 0
 
-  const outFollowUpPct = outboundTotal ? Math.round((callStats.outbound.followUp / outboundTotal) * 100) : 0
-  const outNotInterestedPct = outboundTotal ? Math.round((callStats.outbound.notInterested / outboundTotal) * 100) : 0
-  const outNotAnsweredPct = outboundTotal ? Math.round((callStats.outbound.notAnswered / outboundTotal) * 100) : 0
+  const outCompletedPct = outboundTotal ? Math.round((callStats.outbound.completed / outboundTotal) * 100) : 0
+  const outMissedPct = outboundTotal ? Math.round((callStats.outbound.missed / outboundTotal) * 100) : 0
+  const outInProgressPct = outboundTotal ? Math.round((callStats.outbound.inProgress / outboundTotal) * 100) : 0
 
-  // Format call data for display
-  const recentCalls: Record<'inbound' | 'outbound', FormattedCall[]> = {
-    inbound: calls
-      .filter((call) => call.call_type === "inbound")
-      .slice(0, 3)
-      .map((call) => ({
-        status: call.status === "completed" ? "Resolved" : call.status === "missed" ? "Not Resolved" : "In Progress",
-        contact: call.customer_phone,
-        dateTime: new Date(call.created_at).toLocaleString(),
-        statusColor:
-          call.status === "completed" ? "bg-green-500" : call.status === "missed" ? "bg-red-500" : "bg-yellow-500",
-        summary: call.notes || "No summary available",
-      })),
-    outbound: calls
-      .filter((call) => call.call_type === "outbound")
-      .slice(0, 3)
-      .map((call) => ({
-        status: call.status === "completed" ? "Follow Up" : call.status === "missed" ? "Not Answered" : "In Progress",
-        contact: call.customer_phone,
-        dateTime: new Date(call.created_at).toLocaleString(),
-        statusColor:
-          call.status === "completed" ? "bg-teal-500" : call.status === "missed" ? "bg-orange-500" : "bg-gray-500",
-        summary: call.notes || "No summary available",
-      }))
-  }
+  // Format all calls for display (no filtering by type)
+  const allRecentCalls: FormattedCall[] = calls
+    .slice(0, 10) // Show up to 10 recent calls
+    .map((call) => ({
+      status: call.status === "completed" ? "Completed" : call.status === "missed" ? "Missed" : "In Progress",
+      contact: call.customer_phone,
+      dateTime: new Date(call.created_at).toLocaleString(),
+      statusColor:
+        call.status === "completed" ? "bg-green-500" : call.status === "missed" ? "bg-red-500" : "bg-yellow-500",
+      summary: call.notes || "No summary available",
+    }))
 
   return (
     <div className="p-6">
@@ -597,26 +604,18 @@ export default function Dashboard() {
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-gray-600">Outbound Calls</CardTitle>
-            <Select defaultValue="1week">
-              <SelectTrigger className="w-20 h-6 text-xs border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="1month">1 Month</SelectItem>
-                <SelectItem value="1week">1 Week</SelectItem>
-                <SelectItem value="today">Today</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-xs text-gray-500">
+              Total: {outboundTotal}
+            </div>
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-center h-20">
               <div className="relative w-16 h-16">
                 <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
                   <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e5e7eb" strokeWidth="2" />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#14b8a6" strokeWidth="2" strokeDasharray={`${outFollowUpPct}, 100`} />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${outNotInterestedPct}, 100`} strokeDashoffset={`-${outFollowUpPct}`} />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${outNotAnsweredPct}, 100`} strokeDashoffset={`-${outFollowUpPct + outNotInterestedPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#14b8a6" strokeWidth="2" strokeDasharray={`${outCompletedPct}, 100`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${outMissedPct}, 100`} strokeDashoffset={`-${outCompletedPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${outInProgressPct}, 100`} strokeDashoffset={`-${outCompletedPct + outMissedPct}`} />
                 </svg>
               </div>
             </div>
@@ -624,23 +623,23 @@ export default function Dashboard() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
-                  <span>Follow Up</span>
+                  <span>Completed</span>
                 </div>
-                <span>{outFollowUpPct}%</span>
+                <span>{outCompletedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                  <span>Not Interested</span>
+                  <span>Missed</span>
                 </div>
-                <span>{outNotInterestedPct}%</span>
+                <span>{outMissedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                  <span>Not Answered</span>
+                  <span>In Progress</span>
                 </div>
-                <span>{outNotAnsweredPct}%</span>
+                <span>{outInProgressPct}%</span>
               </div>
             </div>
           </CardContent>
@@ -649,26 +648,18 @@ export default function Dashboard() {
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-gray-600">Inbound Calls</CardTitle>
-            <Select defaultValue="1week">
-              <SelectTrigger className="w-20 h-6 text-xs border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="1month">1 Month</SelectItem>
-                <SelectItem value="1week">1 Week</SelectItem>
-                <SelectItem value="today">Today</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-xs text-gray-500">
+              Total: {inboundTotal}
+            </div>
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-center h-20">
               <div className="relative w-16 h-16">
                 <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
                   <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e5e7eb" strokeWidth="2" />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#10b981" strokeWidth="2" strokeDasharray={`${inResolvedPct}, 100`} />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${inNotResolvedPct}, 100`} strokeDashoffset={`-${inResolvedPct}`} />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${inForwardedPct}, 100`} strokeDashoffset={`-${inResolvedPct + inNotResolvedPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#10b981" strokeWidth="2" strokeDasharray={`${inCompletedPct}, 100`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray={`${inMissedPct}, 100`} strokeDashoffset={`-${inCompletedPct}`} />
+                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray={`${inInProgressPct}, 100`} strokeDashoffset={`-${inCompletedPct + inMissedPct}`} />
                 </svg>
               </div>
             </div>
@@ -676,23 +667,23 @@ export default function Dashboard() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span>Resolved</span>
+                  <span>Completed</span>
                 </div>
-                <span>{inResolvedPct}%</span>
+                <span>{inCompletedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                  <span>Not Resolved</span>
+                  <span>Missed</span>
                 </div>
-                <span>{inNotResolvedPct}%</span>
+                <span>{inMissedPct}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                  <span>Forwarded</span>
+                  <span>In Progress</span>
                 </div>
-                <span>{inForwardedPct}%</span>
+                <span>{inInProgressPct}%</span>
               </div>
             </div>
           </CardContent>
@@ -701,21 +692,15 @@ export default function Dashboard() {
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-medium text-gray-600">Average Call Duration</CardTitle>
-            <Select defaultValue="inbound">
-              <SelectTrigger className="w-20 h-6 text-xs border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="inbound">Inbound</SelectItem>
-                <SelectItem value="outbound">Outbound</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-xs text-gray-500">
+              All Calls
+            </div>
           </CardHeader>
           <CardContent>
             <div className="text-center">
               <span className="text-3xl font-bold text-black">{callMetrics.avgDuration}</span>
               <p className="text-sm text-gray-500">minutes</p>
-                          </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -725,15 +710,9 @@ export default function Dashboard() {
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-medium text-black">Number of Calls</CardTitle>
-            <Select defaultValue="weekly">
-              <SelectTrigger className="w-24 border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-xs text-gray-500">
+              Recent Activity
+            </div>
           </CardHeader>
           <CardContent>
             <AgentPerformanceChart calls={calls} />
@@ -743,15 +722,9 @@ export default function Dashboard() {
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-medium text-black">Customer Talking Points</CardTitle>
-            <Select defaultValue="inbound">
-              <SelectTrigger className="w-24 border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="inbound">Inbound</SelectItem>
-                <SelectItem value="outbound">Outbound</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-xs text-gray-500">
+              From Supabase
+            </div>
           </CardHeader>
           <CardContent>
             <div className="h-64">
@@ -796,20 +769,8 @@ export default function Dashboard() {
       <Card className="bg-white border-gray-200 shadow-sm">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg font-medium text-black">Recent Calls</CardTitle>
-          <div className="flex items-center gap-4">
-            <Tabs
-              value={callType}
-              onValueChange={(value: string) => setCallType(value as 'inbound' | 'outbound')}
-              className="w-auto"
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="inbound">Inbound</TabsTrigger>
-                <TabsTrigger value="outbound">Outbound</TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <Button variant="outline" size="sm" className="border-gray-200 text-black hover:bg-gray-50 bg-transparent">
-              Filter
-            </Button>
+          <div className="text-xs text-gray-500">
+            From Vapi API
           </div>
         </CardHeader>
         <CardContent>
@@ -823,7 +784,7 @@ export default function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {recentCalls[callType]?.map((call: FormattedCall, index: number) => (
+              {allRecentCalls.map((call: FormattedCall, index: number) => (
                 <TableRow key={index} className="hover:bg-gray-50">
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -831,13 +792,11 @@ export default function Dashboard() {
                       <Badge
                         variant="outline"
                         className={
-                          call.status === "Resolved" || call.status === "Follow Up"
+                          call.status === "Completed"
                             ? "bg-green-100 text-green-700 border-green-200"
-                            : call.status === "Not Resolved" || call.status === "Not Interested"
+                            : call.status === "Missed"
                               ? "bg-red-100 text-red-700 border-red-200"
-                              : call.status === "Forwarded"
-                                ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                : "bg-orange-100 text-orange-700 border-orange-200"
+                              : "bg-yellow-100 text-yellow-700 border-yellow-200"
                         }
                       >
                         {call.status}
@@ -888,6 +847,13 @@ export default function Dashboard() {
                   </TableCell>
                 </TableRow>
               ))}
+              {allRecentCalls.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-gray-500 py-8">
+                    No recent calls available
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>

@@ -1,17 +1,16 @@
 "use client"
 
-/* using app-level route segment config from layout */
-
-1import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
-import { Calendar, TrendingUp, Phone, Clock, DollarSign, Users, Activity, Target, Zap, BarChart3, PieChart as PieChartIcon, LineChart, TrendingDown } from "lucide-react"
+import { Calendar, TrendingUp, Phone, Clock, DollarSign, Users, Activity, Target, Zap, BarChart3, PieChart as PieChartIcon, LineChart, TrendingDown, Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart as RechartsLineChart, Line, AreaChart, Area, RadialBarChart, RadialBar, Legend } from "recharts"
+import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart as RechartsLineChart, Line, AreaChart, Area, RadialBarChart, RadialBar, Legend } from "recharts"
 import { VapiAnalyticsRequest } from "@/lib/api/vapi"
 import { DayPicker } from "react-day-picker"
 import type { DateRange } from "react-day-picker"
@@ -36,6 +35,7 @@ interface TalkingPointDatum { name: string; value: number; color: string; calls:
 interface VapiMetrics {
   totalCalls: number
   totalDuration: number
+  totalCost: number
   concurrentCalls: number
   avgDuration: number
   successRate: number
@@ -80,16 +80,16 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "#ef4444",
 }
 
-// Professional color palette - teal theme with subtle variations
+// Professional color palette - green, black, and white theme
 const OUTCOME_COLORS = [
-  "#14b8a6", // teal-500
-  "#0d9488", // teal-600  
-  "#0f766e", // teal-700
-  "#115e59", // teal-800
-  "#134e4a", // teal-900
-  "#5eead4", // teal-300
-  "#2dd4bf", // teal-400
-  "#99f6e4"  // teal-200
+  "#10b981", // green-500
+  "#059669", // green-600  
+  "#047857", // green-700
+  "#065f46", // green-800
+  "#064e3b", // green-900
+  "#6b7280", // gray-500
+  "#374151", // gray-700
+  "#1f2937"  // gray-800
 ]
 
 export default function AnalyticsPage() {
@@ -115,6 +115,7 @@ export default function AnalyticsPage() {
   const [vapiMetrics, setVapiMetrics] = useState<VapiMetrics>({
     totalCalls: 0,
     totalDuration: 0,
+    totalCost: 0,
     concurrentCalls: 0,
     avgDuration: 0,
     successRate: 0,
@@ -125,6 +126,7 @@ export default function AnalyticsPage() {
   const [previousMetrics, setPreviousMetrics] = useState<VapiMetrics>({
     totalCalls: 0,
     totalDuration: 0,
+    totalCost: 0,
     concurrentCalls: 0,
     avgDuration: 0,
     successRate: 0,
@@ -216,8 +218,11 @@ export default function AnalyticsPage() {
       const to = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0))
       setSelectedRange({ from, to })
       setRangeLabel('Last month')
-    } else {
-      setSelectedRange(undefined)
+    } else if (preset === 'all') {
+      // Set a very wide range for "all time" - last 2 years to future
+      const from = startOfDay(new Date(now.getFullYear() - 2, 0, 1))
+      const to = endOfDay(new Date(now.getFullYear() + 1, 11, 31))
+      setSelectedRange({ from, to })
       setRangeLabel('All time')
     }
     setIsCalendarOpen(false)
@@ -300,6 +305,43 @@ export default function AnalyticsPage() {
     }
   }
 
+  // Calculate concurrent calls from VAPI data
+  const calculateConcurrentCalls = (calls: any[]): number => {
+    if (calls.length === 0) return 0
+
+    // Create events for call start and end times
+    const events: { time: number; type: 'start' | 'end' }[] = []
+    
+    calls.forEach((call: any) => {
+      const startTime = new Date(call.startedAt || call.createdAt || Date.now()).getTime()
+      const endTime = new Date(call.endedAt || call.updatedAt || Date.now()).getTime()
+      
+      // Only count calls that have both start and end times
+      if (startTime && endTime && endTime > startTime) {
+        events.push({ time: startTime, type: 'start' })
+        events.push({ time: endTime, type: 'end' })
+      }
+    })
+
+    // Sort events by time
+    events.sort((a, b) => a.time - b.time)
+
+    // Calculate maximum concurrent calls
+    let currentConcurrent = 0
+    let maxConcurrent = 0
+
+    events.forEach(event => {
+      if (event.type === 'start') {
+        currentConcurrent++
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
+      } else {
+        currentConcurrent--
+      }
+    })
+
+    return maxConcurrent
+  }
+
   // Fetch VAPI Analytics Data - Using same approach as call history
   const fetchVapiAnalytics = async () => {
     if (!selectedRange?.from || !selectedRange?.to) return
@@ -337,13 +379,14 @@ export default function AnalyticsPage() {
         }).length
         const successRate = totalCalls > 0 ? Math.round((successfulCalls / totalCalls) * 100) : 0
 
-        // Calculate estimated cost (assuming $0.01 per minute)
-        const totalCost = (totalDurationSec / 60) * 0.01
+        // Calculate concurrent calls (max simultaneous calls at any point)
+        const concurrentCalls = calculateConcurrentCalls(filteredCalls)
 
         setVapiMetrics({
           totalCalls,
           totalDuration: Math.round(totalDurationSec / 60), // Convert to minutes
-          totalCost: parseFloat(totalCost.toFixed(2)),
+          totalCost: 0, // Keep for interface compatibility but not used
+          concurrentCalls,
           avgDuration: parseFloat((avgDurationSec / 60).toFixed(1)), // Convert to minutes
           successRate,
           peakHour: "2:00 PM", // Static for now
@@ -476,6 +519,7 @@ export default function AnalyticsPage() {
         totalCalls: 0,
         totalDuration: 0,
         totalCost: 0,
+        concurrentCalls: 0,
         avgDuration: 0,
         successRate: 0,
         peakHour: "12:00 PM",
@@ -537,7 +581,7 @@ export default function AnalyticsPage() {
 
       if (sortedPoints.length > 0) {
         const total = sortedPoints.reduce((sum, [, count]) => sum + count, 0)
-        const colors = ["#14b8a6", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"]
+        const colors = ["#10b981", "#059669", "#047857", "#065f46", "#064e3b", "#6b7280"]
         
         const talking: TalkingPointDatum[] = sortedPoints.map(([text, count], index) => ({
           name: text.charAt(0).toUpperCase() + text.slice(1).toLowerCase(),
@@ -577,29 +621,90 @@ export default function AnalyticsPage() {
 
   const downloadAllCSV = () => {
     let csvContent = "data:text/csv;charset=utf-8,"
+    
+    // Report Header
+    csvContent += "COMPREHENSIVE ANALYTICS REPORT\n"
+    csvContent += `Generated: ${new Date().toLocaleString()}\n`
+    csvContent += `Date Range: ${rangeLabel}\n\n`
 
-    csvContent += "CALLS DATA\n"
-    csvContent += "Date,Day,Number of Calls\n"
-    callsData.forEach((item) => {
-      csvContent += `${item.fullDate.toLocaleDateString()},${item.date},${item.calls}\n`
+    // Key Metrics Summary
+    csvContent += "KEY PERFORMANCE METRICS\n"
+    csvContent += "Metric,Value,Unit\n"
+    csvContent += `Total Calls,${vapiMetrics.totalCalls},calls\n`
+    csvContent += `Success Rate,${vapiMetrics.successRate},%\n`
+    csvContent += `Average Duration,${vapiMetrics.avgDuration},minutes\n`
+    csvContent += `Peak Concurrent Calls,${vapiMetrics.concurrentCalls},calls\n`
+    csvContent += `Conversion Rate,${vapiMetrics.conversionRate},%\n`
+    csvContent += `Customer Satisfaction,${vapiMetrics.customerSatisfaction},/5.0\n`
+    csvContent += `Total Duration,${vapiMetrics.totalDuration},minutes\n`
+    csvContent += `Peak Hour,${vapiMetrics.peakHour},time\n\n`
+
+    // Daily Call Volume Data
+    csvContent += "DAILY CALL VOLUME ANALYSIS\n"
+    csvContent += "Date,Total Calls,Successful Calls,Duration (minutes),Success Rate (%)\n"
+    callVolumeData.forEach((item) => {
+      const successRate = item.calls > 0 ? Math.round((item.success / item.calls) * 100) : 0
+      csvContent += `${item.date},${item.calls},${item.success},${item.duration},${successRate}\n`
     })
 
-    csvContent += "\nSTATUS BREAKDOWN\n"
-    csvContent += "Status,Count\n"
-    followUpData.forEach((item) => {
-      csvContent += `${item.name},${item.value}\n`
+    // Call Outcomes Breakdown
+    csvContent += "\nCALL OUTCOMES DISTRIBUTION\n"
+    csvContent += "Outcome,Count,Percentage\n"
+    callOutcomeData.forEach((item) => {
+      csvContent += `${item.outcome},${item.count},${item.percentage}%\n`
     })
 
-    csvContent += "\nCUSTOMER TALKING POINTS\n"
-    csvContent += "Topic,Percentage,Mentions\n"
+    // Hourly Distribution
+    csvContent += "\nHOURLY CALL DISTRIBUTION\n"
+    csvContent += "Hour,Total Calls,Successful Calls,Success Rate (%)\n"
+    hourlyData.forEach((item) => {
+      const successRate = item.calls > 0 ? Math.round((item.success / item.calls) * 100) : 0
+      csvContent += `${item.hour},${item.calls},${item.success},${successRate}\n`
+    })
+
+    // Geographic Distribution
+    csvContent += "\nGEOGRAPHIC DISTRIBUTION\n"
+    csvContent += "Region,Total Calls,Successful Calls,Duration (hours),Success Rate (%)\n"
+    geographicData.forEach((item) => {
+      const successRate = item.calls > 0 ? Math.round((item.success / item.calls) * 100) : 0
+      const durationHours = Math.round(item.duration / 60 * 100) / 100
+      csvContent += `${item.region},${item.calls},${item.success},${durationHours},${successRate}\n`
+    })
+
+    // Customer Talking Points
+    csvContent += "\nCUSTOMER TALKING POINTS ANALYSIS\n"
+    csvContent += "Topic,Percentage,Total Mentions,Frequency\n"
     talkingPointsData.forEach((item) => {
-      csvContent += `${item.name},${item.value}%,${item.calls}\n`
+      csvContent += `${item.name},${item.value}%,${item.calls},High\n`
     })
+
+    // Performance Benchmarks
+    csvContent += "\nPERFORMANCE BENCHMARKS\n"
+    csvContent += "Benchmark,Current Value,Industry Standard,Status\n"
+    csvContent += `Success Rate,${vapiMetrics.successRate}%,70%,${vapiMetrics.successRate >= 70 ? 'Above Standard' : 'Below Standard'}\n`
+    csvContent += `Average Duration,${vapiMetrics.avgDuration} min,3-5 min,${vapiMetrics.avgDuration >= 3 && vapiMetrics.avgDuration <= 8 ? 'Optimal' : vapiMetrics.avgDuration > 8 ? 'Above Optimal' : 'Below Optimal'}\n`
+    csvContent += `Concurrent Capacity,${vapiMetrics.concurrentCalls},10,${vapiMetrics.concurrentCalls <= 10 ? 'Within Limits' : 'Above Capacity'}\n`
+    csvContent += `Conversion Rate,${vapiMetrics.conversionRate}%,60%,${vapiMetrics.conversionRate >= 60 ? 'Above Standard' : 'Below Standard'}\n`
+
+    // AI Insights Summary
+    csvContent += "\nAI-POWERED INSIGHTS SUMMARY\n"
+    csvContent += "Category,Analysis,Recommendation\n"
+    csvContent += `Conversational AI Performance,${vapiMetrics.successRate > 85 ? 'Exceptional' : vapiMetrics.successRate > 70 ? 'Strong' : 'Developing'} conversational intelligence,${vapiMetrics.successRate > 85 ? 'Maintain current performance' : 'Optimize dialogue management systems'}\n`
+    csvContent += `Infrastructure Scalability,${vapiMetrics.concurrentCalls > 8 ? 'Robust' : vapiMetrics.concurrentCalls > 4 ? 'Solid' : 'Foundational'} concurrent processing,${vapiMetrics.concurrentCalls > 8 ? 'Monitor for optimization opportunities' : 'Consider infrastructure scaling'}\n`
+    csvContent += `Predictive Analytics,${vapiMetrics.conversionRate > 80 ? 'Exceptional' : vapiMetrics.conversionRate > 60 ? 'Strong' : 'Developing'} conversion optimization,${vapiMetrics.conversionRate > 80 ? 'Leverage advanced behavioral analytics' : 'Enhance predictive modeling capabilities'}\n`
+
+    // System Capacity Analysis
+    csvContent += "\nSYSTEM CAPACITY ANALYSIS\n"
+    csvContent += "Metric,Current,Capacity,Utilization (%),Status\n"
+    const utilization = vapiMetrics.concurrentCalls > 0 ? Math.round((vapiMetrics.concurrentCalls / 10) * 100) : 0
+    csvContent += `Concurrent Calls,${vapiMetrics.concurrentCalls},10,${utilization},${utilization < 70 ? 'Optimal' : utilization < 90 ? 'High' : 'Critical'}\n`
+    csvContent += `Call Volume,${vapiMetrics.totalCalls},Unlimited,N/A,Active\n`
+    csvContent += `Average Response Time,${vapiMetrics.avgDuration} min,<5 min,N/A,${vapiMetrics.avgDuration <= 5 ? 'Optimal' : 'Review Required'}\n`
 
     const encodedUri = encodeURI(csvContent)
     const link = document.createElement("a")
     link.setAttribute("href", encodedUri)
-    link.setAttribute("download", "analytics_report.csv")
+    link.setAttribute("download", `comprehensive_analytics_report_${new Date().toISOString().split('T')[0]}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -612,7 +717,8 @@ export default function AnalyticsPage() {
 
   
   return (
-    <div className="ml-20 p-6 bg-white min-h-screen">
+    <TooltipProvider>
+      <div className="ml-20 p-6 bg-white min-h-screen">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-black mb-2">Analytics Dashboard</h1>
         <p className="text-gray-600">Analyze your AI agent performance and customer interactions</p>
@@ -667,11 +773,16 @@ export default function AnalyticsPage() {
         <div className="space-y-8">
           {/* Key Metrics Cards with Real-time Animation */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200 hover:shadow-lg transition-all duration-300">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-blue-600 mb-1">Total Calls</p>
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-300 cursor-help">
+                  <CardContent className="p-6">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-sm font-medium text-blue-600">Total Calls</p>
+                          <Info className="h-3 w-3 text-blue-400" />
+                        </div>
                     <p className="text-3xl font-bold text-blue-900">
                       <AnimatedCounter value={vapiMetrics.totalCalls} />
                     </p>
@@ -700,12 +811,25 @@ export default function AnalyticsPage() {
                 </div>
               </CardContent>
             </Card>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Total number of AI agent calls made during the selected time period. 
+                  Includes all call statuses from the VAPI platform. Updates in real-time.
+                </p>
+              </TooltipContent>
+            </UITooltip>
 
-            <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200 hover:shadow-lg transition-all duration-300">
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-300 cursor-help">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-green-600 mb-1">Success Rate</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-sm font-medium text-green-600">Success Rate</p>
+                      <Info className="h-3 w-3 text-green-400" />
+                    </div>
                     <p className="text-3xl font-bold text-green-900">
                       <AnimatedCounter value={vapiMetrics.successRate} suffix="%" />
                     </p>
@@ -734,12 +858,25 @@ export default function AnalyticsPage() {
                 </div>
               </CardContent>
             </Card>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Percentage of calls that ended successfully (completed status). 
+                  Higher success rates indicate better AI agent performance and customer engagement.
+                </p>
+              </TooltipContent>
+            </UITooltip>
 
-            <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200 hover:shadow-lg transition-all duration-300">
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-300 cursor-help">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-purple-600 mb-1">Avg Duration</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-sm font-medium text-purple-600">Avg Duration</p>
+                      <Info className="h-3 w-3 text-purple-400" />
+                    </div>
                     <p className="text-3xl font-bold text-purple-900">
                       <AnimatedCounter value={vapiMetrics.avgDuration} suffix="m" />
                     </p>
@@ -768,27 +905,40 @@ export default function AnalyticsPage() {
                 </div>
               </CardContent>
             </Card>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Average duration of all calls in minutes. 
+                  Longer durations typically indicate better customer engagement and conversation quality.
+                </p>
+              </TooltipContent>
+            </UITooltip>
 
-            <Card className="bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200 hover:shadow-lg transition-all duration-300">
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-300 cursor-help">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-amber-600 mb-1">Total Cost</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-sm font-medium text-amber-600">Concurrent Calls</p>
+                      <Info className="h-3 w-3 text-amber-400" />
+                    </div>
                     <p className="text-3xl font-bold text-amber-900">
-                      $<AnimatedCounter value={vapiMetrics.totalCost} />
+                      <AnimatedCounter value={vapiMetrics.concurrentCalls} />
                     </p>
                     <div className="flex items-center mt-2">
                       {(() => {
-                        const change = calculatePercentageChange(vapiMetrics.totalCost, previousMetrics.totalCost)
+                        const change = calculatePercentageChange(vapiMetrics.concurrentCalls, previousMetrics.concurrentCalls)
                         return (
                           <>
                             {change.isPositive ? (
-                              <TrendingUp className="h-4 w-4 text-red-500 mr-1" />
+                              <TrendingUp className="h-4 w-4 text-green-500 mr-1" />
                             ) : (
-                              <TrendingDown className="h-4 w-4 text-green-500 mr-1" />
+                              <TrendingDown className="h-4 w-4 text-red-500 mr-1" />
                             )}
-                            <span className={`text-sm ${!change.isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                              {change.percentage > 0 ? `${change.isPositive ? '+' : '-'}${change.percentage}% change` : 'Within budget'}
+                            <span className={`text-sm ${change.isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                              {change.percentage > 0 ? `${change.isPositive ? '+' : '-'}${change.percentage}% change` : 'Stable capacity'}
                             </span>
                           </>
                         )
@@ -796,12 +946,20 @@ export default function AnalyticsPage() {
                     </div>
                   </div>
                   <div className="relative">
-                    <DollarSign className="h-12 w-12 text-amber-500" />
+                    <Users className="h-12 w-12 text-amber-500" />
                     <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
                   </div>
                 </div>
               </CardContent>
             </Card>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Maximum number of simultaneous calls that occurred at any point during the selected period. 
+                  Helps monitor system capacity and performance under load.
+                </p>
+              </TooltipContent>
+            </UITooltip>
           </div>
 
           {/* Tabbed Analytics */}
@@ -841,7 +999,7 @@ export default function AnalyticsPage() {
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxisAny dataKey="date" />
                         <YAxisAny />
-                        <Tooltip />
+                        <RechartsTooltip />
                         <Area type="monotone" dataKey="calls" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.3} />
                         <Area type="monotone" dataKey="success" stroke="#0d9488" fill="#0d9488" fillOpacity={0.3} />
                       </AreaChart>
@@ -872,7 +1030,7 @@ export default function AnalyticsPage() {
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip />
+                        <RechartsTooltip />
                       </PieChart>
                     </ResponsiveContainer>
                   </CardContent>
@@ -893,7 +1051,7 @@ export default function AnalyticsPage() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxisAny dataKey="hour" />
                       <YAxisAny />
-                      <Tooltip />
+                      <RechartsTooltip />
                       <Bar dataKey="calls" fill="#14b8a6" />
                       <Bar dataKey="success" fill="#0d9488" />
                     </BarChart>
@@ -936,21 +1094,47 @@ export default function AnalyticsPage() {
                   </CardContent>
                 </Card>
 
-                {/* Cost Analysis */}
+                {/* Concurrency Analysis */}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Cost Analysis</CardTitle>
+                    <CardTitle className="flex items-center gap-2">
+                      <Users className="h-5 w-5 text-amber-500" />
+                      Concurrency Analysis
+                    </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={250}>
-                      <RechartsLineChart data={callVolumeData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxisAny dataKey="date" />
-                        <YAxisAny />
-                        <Tooltip />
-                        <Line type="monotone" dataKey="cost" stroke="#14b8a6" strokeWidth={2} />
-                      </RechartsLineChart>
-                    </ResponsiveContainer>
+                    <div className="space-y-4">
+                      <div className="text-center p-4 bg-amber-50 rounded-lg">
+                        <Users className="h-12 w-12 text-amber-500 mx-auto mb-2" />
+                        <p className="text-sm text-gray-600">Peak Concurrent Calls</p>
+                        <p className="text-3xl font-bold text-amber-900">{vapiMetrics.concurrentCalls}</p>
+                        <p className="text-xs text-gray-500 mt-1">Maximum simultaneous calls</p>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="text-center p-3 bg-blue-50 rounded-lg">
+                          <p className="text-sm text-gray-600">Avg Utilization</p>
+                          <p className="text-lg font-bold text-blue-900">
+                            {vapiMetrics.concurrentCalls > 0 ? Math.round((vapiMetrics.totalCalls / vapiMetrics.concurrentCalls) * 10) / 10 : 0}%
+                          </p>
+                        </div>
+                        <div className="text-center p-3 bg-green-50 rounded-lg">
+                          <p className="text-sm text-gray-600">Capacity Status</p>
+                          <p className="text-lg font-bold text-green-900">
+                            {vapiMetrics.concurrentCalls < 5 ? 'Low' : vapiMetrics.concurrentCalls < 15 ? 'Medium' : 'High'}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="mt-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-sm font-medium">Concurrency Level</span>
+                          <span className="text-sm text-gray-600">{vapiMetrics.concurrentCalls} calls</span>
+                        </div>
+                        <Progress value={Math.min((vapiMetrics.concurrentCalls / 10) * 100, 100)} className="h-2" />
+                        <p className="text-xs text-gray-500 mt-1">Based on maximum 10 concurrent calls capacity</p>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               </div>
@@ -1007,7 +1191,7 @@ export default function AnalyticsPage() {
                                 <Cell key={`cell-${index}`} fill={entry.color} />
                               ))}
                             </Pie>
-                            <Tooltip formatter={(value, name, props) => [`${value}% (${props.payload.calls} mentions)`, "Interest"]} />
+                            <RechartsTooltip formatter={(value, name, props) => [`${value}% (${props.payload.calls} mentions)`, "Interest"]} />
                           </PieChart>
                         </ResponsiveContainer>
                         <div className="mt-4 space-y-2">
@@ -1038,22 +1222,66 @@ export default function AnalyticsPage() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
-                      <Zap className="h-5 w-5 text-yellow-500" />
+                      <Zap className="h-5 w-5 text-gray-600" />
                       AI-Powered Insights
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
-                      <h4 className="font-medium text-blue-900 mb-2">Peak Performance</h4>
-                      <p className="text-sm text-blue-700">Calls between 2-4 PM show 23% higher success rates. Consider scheduling more calls during this window.</p>
+                    <div className="p-4 bg-gray-50 rounded-lg border-l-4 border-black">
+                      <h4 className="font-medium text-black mb-2">Call Performance Analysis</h4>
+                      <p className="text-sm text-gray-700">
+                        {vapiMetrics.totalCalls > 0 ? (
+                          <>
+                            Based on {vapiMetrics.totalCalls} total calls with a {vapiMetrics.successRate}% success rate, your AI agent shows {vapiMetrics.successRate >= 80 ? 'excellent' : vapiMetrics.successRate >= 60 ? 'good' : 'developing'} performance. 
+                            {vapiMetrics.avgDuration > 0 && ` Average call duration of ${vapiMetrics.avgDuration} minutes indicates ${vapiMetrics.avgDuration >= 5 ? 'strong customer engagement' : vapiMetrics.avgDuration >= 3 ? 'moderate engagement levels' : 'brief but efficient interactions'}.`}
+                            {callOutcomeData.length > 0 && ` The most common outcome is "${callOutcomeData[0]?.outcome}" representing ${callOutcomeData[0]?.percentage}% of all calls.`}
+                          </>
+                        ) : (
+                          'No call data available for analysis. Start making calls to see performance insights.'
+                        )}
+                      </p>
                     </div>
-                    <div className="p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
-                      <h4 className="font-medium text-green-900 mb-2">Conversation Quality</h4>
-                      <p className="text-sm text-green-700">Average call duration of 6.7 minutes indicates good engagement. Customers are staying on calls longer.</p>
+                    <div className="p-4 bg-white rounded-lg border-l-4 border-gray-400">
+                      <h4 className="font-medium text-black mb-2">System Capacity Insights</h4>
+                      <p className="text-sm text-gray-700">
+                        {vapiMetrics.concurrentCalls > 0 ? (
+                          <>
+                            Peak concurrent calls reached {vapiMetrics.concurrentCalls}, indicating {vapiMetrics.concurrentCalls >= 8 ? 'high system utilization' : vapiMetrics.concurrentCalls >= 4 ? 'moderate load handling' : 'low to moderate usage'}. 
+                            {hourlyData.length > 0 && (() => {
+                              const peakHour = hourlyData.reduce((max, hour) => hour.calls > max.calls ? hour : max, hourlyData[0])
+                              return ` Peak activity occurs at ${peakHour?.hour} with ${peakHour?.calls} calls.`
+                            })()}
+                            {geographicData.length > 0 && (() => {
+                              const topRegion = geographicData.reduce((max, region) => region.calls > max.calls ? region : max, geographicData[0])
+                              return ` Most calls originate from ${topRegion?.region} (${topRegion?.calls} calls).`
+                            })()}
+                          </>
+                        ) : (
+                          'System capacity metrics will appear once call activity begins.'
+                        )}
+                      </p>
                     </div>
-                    <div className="p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500">
-                      <h4 className="font-medium text-amber-900 mb-2">Cost Optimization</h4>
-                      <p className="text-sm text-amber-700">Current cost per successful call is $0.19. This is 15% below industry average.</p>
+                    <div className="p-4 bg-gray-50 rounded-lg border-l-4 border-gray-600">
+                      <h4 className="font-medium text-black mb-2">Optimization Recommendations</h4>
+                      <p className="text-sm text-gray-700">
+                        {vapiMetrics.totalCalls > 0 ? (
+                          <>
+                            {vapiMetrics.successRate < 70 && 'Consider reviewing call scripts and AI training to improve success rates. '}
+                            {vapiMetrics.avgDuration < 2 && 'Calls are ending quickly - review conversation flow to increase engagement. '}
+                            {vapiMetrics.avgDuration > 10 && 'Long call durations detected - optimize for efficiency while maintaining quality. '}
+                            {vapiMetrics.concurrentCalls >= 8 && 'High concurrent usage - monitor system performance and consider scaling. '}
+                            {callVolumeData.length > 0 && (() => {
+                              const totalSuccess = callVolumeData.reduce((sum, day) => sum + day.success, 0)
+                              const totalCalls = callVolumeData.reduce((sum, day) => sum + day.calls, 0)
+                              const overallRate = totalCalls > 0 ? Math.round((totalSuccess / totalCalls) * 100) : 0
+                              return overallRate < vapiMetrics.successRate ? 'Recent performance shows improvement trends. ' : 'Maintain current performance levels. '
+                            })()}
+                            {talkingPointsData.length > 0 && `Focus on "${talkingPointsData[0]?.name}" topics which show ${talkingPointsData[0]?.value}% customer interest.`}
+                          </>
+                        ) : (
+                          'Optimization recommendations will be generated based on your call performance data.'
+                        )}
+                      </p>
                     </div>
                   </CardContent>
                 </Card>
@@ -1099,11 +1327,8 @@ export default function AnalyticsPage() {
             </CardHeader>
             <CardContent>
               <div className="flex gap-4">
-                <Button onClick={downloadAllCSV} className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600">
+                <Button onClick={downloadAllCSV} className="flex items-center gap-2 bg-black hover:bg-gray-800 text-white">
                   Download CSV Report
-                </Button>
-                <Button onClick={downloadAllPDF} variant="outline" className="flex items-center gap-2 bg-transparent">
-                  Download PDF Report
                 </Button>
               </div>
               <p className="text-sm text-gray-600 mt-2">
@@ -1145,6 +1370,7 @@ export default function AnalyticsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   )
 }
 

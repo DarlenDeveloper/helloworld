@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Plus } from "lucide-react"
@@ -8,10 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import dynamic from "next/dynamic"
 const AgentPerformanceChart = dynamic(
   () => import("@/components/agent-performance-chart").then((m) => m.AgentPerformanceChart),
@@ -123,10 +121,16 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const supabase = createClient()
+  const pollRef = useRef<NodeJS.Timeout | null>(null)
+  // Set up or reset auto refresh interval (5 minutes)
+  const setupAutoRefresh = (uid: string) => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(() => {
+      if (uid) fetchData(uid)
+    }, 300000) // 5 minutes
+  }
 
   useEffect(() => {
-    let pollInterval: NodeJS.Timeout | null = null
-
     const init = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
@@ -140,12 +144,8 @@ export default function Dashboard() {
         setCurrentUserId(user.id)
         await fetchData(user.id)
 
-        // Replace realtime subscription with periodic polling for Vapi data
-        pollInterval = setInterval(() => {
-          if (user.id) {
-            fetchData(user.id)
-          }
-        }, 30000) // Poll every 30 seconds
+        // Auto-refresh every 5 minutes
+        setupAutoRefresh(user.id)
       } catch (error) {
         console.error("Dashboard initialization error:", error)
       } finally {
@@ -156,7 +156,7 @@ export default function Dashboard() {
     init()
     
     return () => {
-      if (pollInterval) clearInterval(pollInterval)
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [router, supabase])
 
@@ -164,12 +164,18 @@ export default function Dashboard() {
   const mapVapiStatus = (vapiStatus: string): 'completed' | 'missed' | 'in_progress' => {
     switch (vapiStatus?.toLowerCase()) {
       case 'ended':
+      case 'completed':
+      case 'success':
         return 'completed'
       case 'queued':
       case 'ringing':
       case 'in-progress':
       case 'forwarding':
         return 'in_progress'
+      case 'failed':
+      case 'busy':
+      case 'no-answer':
+        return 'missed'
       default:
         return 'missed'
     }
@@ -185,7 +191,7 @@ export default function Dashboard() {
         user_id: 'vapi', // Not applicable for Vapi calls
         customer_name: vapiCall.customer?.name || vapiCall.customerName || 'Unknown',
         customer_phone: vapiCall.customer?.number || vapiCall.phoneNumber || vapiCall.toNumber || '',
-        call_type: vapiCall.type === 'inbound' ? 'inbound' : 'outbound', // Use actual call type
+        call_type: vapiCall.type === 'inboundPhoneCall' ? 'inbound' : vapiCall.type === 'outboundPhoneCall' ? 'outbound' : (vapiCall.type === 'inbound' ? 'inbound' : 'outbound'), // Use actual call type
         status: mapVapiStatus(vapiCall.status),
         duration: vapiCall.duration || 0,
         notes: vapiCall.summary || vapiCall.transcript || '',
@@ -199,14 +205,24 @@ export default function Dashboard() {
   const calculateCallStatsFromVapi = (vapiCalls: any[]) => {
     console.log('Calculating call stats from Vapi calls:', vapiCalls.length)
     
-    // Filter calls by type - check both 'type' and 'call_type' properties
-    const outboundCalls = vapiCalls.filter(call => 
-      call.type === 'outbound' || call.call_type === 'outbound' || 
-      (call.type !== 'inbound' && call.call_type !== 'inbound')
+    // Filter calls by explicit Vapi types when available
+    let outboundCalls = vapiCalls.filter((call: any) =>
+      call.type === 'outboundPhoneCall' || call.call_type === 'outboundPhoneCall'
     )
-    const inboundCalls = vapiCalls.filter(call => 
-      call.type === 'inbound' || call.call_type === 'inbound'
+    let inboundCalls = vapiCalls.filter((call: any) =>
+      call.type === 'inboundPhoneCall' || call.call_type === 'inboundPhoneCall'
     )
+
+    // Fallback to generic 'inbound'/'outbound' if specific types are not present
+    if (outboundCalls.length === 0 && inboundCalls.length === 0) {
+      outboundCalls = vapiCalls.filter((call: any) =>
+        call.type === 'outbound' || call.call_type === 'outbound' ||
+        (call.type !== 'inbound' && call.call_type !== 'inbound')
+      )
+      inboundCalls = vapiCalls.filter((call: any) =>
+        call.type === 'inbound' || call.call_type === 'inbound'
+      )
+    }
 
     console.log('Outbound calls:', outboundCalls.length)
     console.log('Inbound calls:', inboundCalls.length)
@@ -234,15 +250,36 @@ export default function Dashboard() {
   // Helper function to calculate call metrics from Vapi calls
   const calculateCallMetricsFromVapi = (vapiCalls: any[]) => {
     const totalPackageMinutes = 5000
-    const usedMinutes = vapiCalls.reduce((total: number, call) => {
-      const duration = call.duration || 0
-      return total + (duration / 60) // Convert seconds to minutes
-    }, 0)
-    
+
+    // Robustly extract duration in seconds from various possible Vapi fields
+    const toSeconds = (call: any): number => {
+      let d: any = call?.duration ?? call?.durationSec ?? call?.durationSeconds
+      if (typeof d === 'string') d = parseFloat(d)
+      if (typeof d === 'number' && isFinite(d) && d > 0) return d
+
+      let dm: any = call?.durationMs ?? call?.durationMilliseconds
+      if (typeof dm === 'string') dm = parseFloat(dm)
+      if (typeof dm === 'number' && isFinite(dm) && dm > 0) return dm / 1000
+
+      const endStr = call?.endedAt || call?.ended_at || call?.updatedAt
+      const startStr = call?.startedAt || call?.started_at || call?.createdAt || call?.created_at
+      if (endStr && startStr) {
+        const end = new Date(endStr).getTime()
+        const start = new Date(startStr).getTime()
+        const diff = (end - start) / 1000
+        if (isFinite(diff) && diff > 0) return diff
+      }
+      return 0
+    }
+
+    const durationsSec: number[] = (vapiCalls || []).map(toSeconds).filter((n) => n > 0)
+    const usedSeconds = durationsSec.reduce((a, b) => a + b, 0)
+    const usedMinutes = usedSeconds / 60
+
     const remaining = Math.max(0, totalPackageMinutes - usedMinutes)
     const percentRemaining = Math.round((remaining / totalPackageMinutes) * 100)
-    const totalCalls = vapiCalls.length || 1
-    const avgDuration = vapiCalls.length ? Math.round((usedMinutes / totalCalls) * 10) / 10 : 0
+    const totalCallsForAvg = durationsSec.length || (vapiCalls?.length || 1)
+    const avgDuration = Math.round((usedMinutes / totalCallsForAvg) * 10) / 10
     const avgChangePercent = 12
 
     setCallMetrics({
@@ -422,18 +459,23 @@ export default function Dashboard() {
     router.push("/auth")
   }
 
-  // Calculate call statistics from calls data
+  const handleRefresh = async () => {
+    await fetchData(currentUserId || undefined)
+    if (currentUserId) setupAutoRefresh(currentUserId)
+  }
+
+  // Calculate call statistics from arrays of statuses
   const calculateCallStats = (inboundStatuses: string[], outboundStatuses: string[]) => {
     const stats: CallStats = {
       inbound: {
-        resolved: inboundStatuses.filter(s => s === 'completed').length,
-        notResolved: inboundStatuses.filter(s => s === 'missed').length,
-        forwarded: inboundStatuses.filter(s => s === 'in_progress').length
+        completed: inboundStatuses.filter(s => s === 'completed').length,
+        missed: inboundStatuses.filter(s => s === 'missed').length,
+        inProgress: inboundStatuses.filter(s => s === 'in_progress').length
       },
       outbound: {
-        followUp: outboundStatuses.filter(s => s === 'completed').length,
-        notInterested: outboundStatuses.filter(s => s === 'in_progress').length,
-        notAnswered: outboundStatuses.filter(s => s === 'missed').length
+        completed: outboundStatuses.filter(s => s === 'completed').length,
+        missed: outboundStatuses.filter(s => s === 'missed').length,
+        inProgress: outboundStatuses.filter(s => s === 'in_progress').length
       }
     }
     setCallStats(stats)
@@ -551,7 +593,7 @@ export default function Dashboard() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchData(currentUserId || undefined)}
+            onClick={handleRefresh}
             className="border-gray-200 text-black hover:bg-gray-50"
           >
             Refresh
@@ -723,7 +765,7 @@ export default function Dashboard() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-medium text-black">Customer Talking Points</CardTitle>
             <div className="text-xs text-gray-500">
-              From Supabase
+              Variety
             </div>
           </CardHeader>
           <CardContent>
@@ -770,7 +812,7 @@ export default function Dashboard() {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg font-medium text-black">Recent Calls</CardTitle>
           <div className="text-xs text-gray-500">
-            From Vapi API
+            Most recent
           </div>
         </CardHeader>
         <CardContent>

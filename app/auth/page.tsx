@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { EyeIcon, EyeOffIcon } from "lucide-react"
+// import { Eye, EyeOff } from "lucide-react" // TODO: Fix icon imports
 import Image from "next/image"
 
 export default function Auth() {
@@ -197,7 +197,7 @@ export default function Auth() {
                         onClick={() => setShowPassword(!showPassword)}
                         disabled={loading}
                       >
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showPassword ? "👁️" : "👁️‍🗨️"}
                       </Button>
                     </div>
                   </div>
@@ -277,7 +277,7 @@ export default function Auth() {
                         onClick={() => setShowPassword(!showPassword)}
                         disabled={loading}
                       >
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showPassword ? "👁️" : "👁️‍🗨️"}
                       </Button>
                     </div>
                   </div>
@@ -305,7 +305,7 @@ export default function Auth() {
                         onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                         disabled={loading}
                       >
-                        {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showConfirmPassword ? "👁️" : "👁️‍🗨️"}
                       </Button>
                     </div>
                   </div>

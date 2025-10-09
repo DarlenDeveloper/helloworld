@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from "next/server"
 
 export async function POST(req: Request) {
-  console.log('Create single call endpoint called')
+  console.log('Create web call endpoint called')
 
   try {
     const { customerName, customerPhone, script, reason } = await req.json()
@@ -17,10 +17,10 @@ export async function POST(req: Request) {
       }, { status: 400 })
     }
 
-    // Get environment variables
+    // Get environment variables - use VAPI_WEB_ASSISTANT_ID for web calls
     const apiKey = process.env.VAPI_API_KEY
     const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID
-    const assistantId = process.env.VAPI_ASSISTANT_ID || "1cdadc27-e2be-4b54-b7a9-bb87f6ad14d3"
+    const webAssistantId = process.env.VAPI_WEB_ASSISTANT_ID
 
     if (!apiKey || !phoneNumberId) {
       return NextResponse.json({
@@ -29,9 +29,16 @@ export async function POST(req: Request) {
       }, { status: 500 })
     }
 
-    console.log('Creating call for:', customerName, customerPhone)
+    if (!webAssistantId) {
+      return NextResponse.json({
+        success: false,
+        error: "No web assistant added. Please configure VAPI_WEB_ASSISTANT_ID environment variable."
+      }, { status: 500 })
+    }
 
-    // Create the call using Vapi API
+    console.log('Creating web call for:', customerName, customerPhone)
+
+    // Create the call using Vapi API with type: "webCall"
     const response = await fetch("https://api.vapi.ai/call", {
       method: "POST",
       headers: {
@@ -40,7 +47,8 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         name: `${reason} - ${customerName}`,
-        assistantId: assistantId,
+        type: "webCall",
+        assistantId: webAssistantId,
         phoneNumberId: phoneNumberId,
         customer: {
           number: customerPhone,
@@ -62,18 +70,18 @@ export async function POST(req: Request) {
     }
 
     const callData = await response.json()
-    console.log('Call created successfully:', callData.id)
+    console.log('Web call created successfully:', callData.id)
 
     return NextResponse.json({
       success: true,
       data: callData,
-      message: `Call created successfully for ${customerName}`
+      message: `Web call created successfully for ${customerName}`
     })
 
   } catch (error: any) {
-    console.error("Create call error:", error)
+    console.error("Create web call error:", error)
     
-    let errorMessage = error?.message || "Failed to create call"
+    let errorMessage = error?.message || "Failed to create web call"
     if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
       errorMessage = "Invalid Vapi API key. Please check your VAPI_API_KEY environment variable."
     } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {

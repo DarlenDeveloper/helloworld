@@ -11,9 +11,14 @@ export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
 export const metadata: Metadata = {
-  title: "AI Agent Dashboard",
-  description: "AI Customer Service Agent Management Platform",
+  title: "Airies - AI Agent Dashboard",
+  description: "Airies AI Customer Service Agent Management Platform",
   generator: "v0.app",
+  icons: {
+    icon: "/airieslogo.jpeg",
+    shortcut: "/airieslogo.jpeg",
+    apple: "/airieslogo.jpeg",
+  },
 }
 
 export default function RootLayout({

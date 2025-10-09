@@ -28,15 +28,12 @@ export function Sidebar() {
 
   const menuItems = [
     { icon: LayoutGrid, href: "/dashboard", label: "Dashboard", active: pathname === "/dashboard" },
-    { icon: FileText, href: "/batches", label: "Batches", active: pathname?.startsWith("/batches") },
     { icon: Phone, href: "/scheduling", label: "Call Scheduling", active: pathname === "/scheduling" },
-    { icon: Phone, href: "/outbound-call", label: "Outbound Call", active: pathname === "/outbound-call" },
-            { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
+    { icon: History, href: "/call-history", label: "Call History", active: pathname === "/call-history" },
     { icon: BarChart3, href: "/analytics", label: "Analytics", active: pathname === "/analytics" },
     { icon: Brain, href: "/knowledge-base", label: "Knowledge Base", active: pathname === "/knowledge-base" },
-    { icon: FormInput, href: "/forms/contact", label: "Web Forms", active: pathname === "/forms/contact" },
+    { icon: FormInput, href: "/chat", label: "Chat", active: pathname === "/chat" },
     { icon: Users, href: "/users", label: "Users", active: pathname === "/users" },
-        { icon: BarChart, href: "/reports", label: "Reports", active: pathname === "/reports" },
         { icon: FileText, href: "/logs", label: "User Logs", active: pathname === "/logs" },
   ]
 

@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Eye, EyeOff } from "lucide-react"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+import Image from "next/image"
 
 export default function Auth() {
   const [email, setEmail] = useState("")
@@ -122,7 +123,21 @@ export default function Auth() {
     <div className="min-h-screen flex">
       <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 p-8">
         <Card className="w-full max-w-md shadow-xl bg-white/60 backdrop-blur border border-white/40">
-          <CardHeader className="pb-4" />
+          <CardHeader className="pb-4 text-center">
+            <div className="flex justify-center mb-4">
+              <Image
+                src="/airieslogo.jpeg"
+                alt="Airies Logo"
+                width={80}
+                height={80}
+                className="rounded-full"
+              />
+            </div>
+            <CardTitle className="text-2xl font-bold text-gray-800">Welcome to Airies</CardTitle>
+            <CardDescription className="text-gray-600">
+              Sign in to your account or create a new one
+            </CardDescription>
+          </CardHeader>
           <CardContent className="pb-8">
             <Tabs defaultValue="signin" className="w-full" onValueChange={resetForm}>
               <TabsList className="grid w-full grid-cols-2 mb-8">

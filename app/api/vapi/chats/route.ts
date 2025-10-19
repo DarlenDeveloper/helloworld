@@ -26,7 +26,13 @@ export async function GET(req: Request) {
       }, { status: 400 })
     }
 
-    const response = await fetch(`https://api.vapi.ai/chat?assistantId=${assistantId}`, {
+    // Request a larger page (no date filters) — default limit 1000
+    // We intentionally ignore from/to to avoid client-side date parse issues.
+    const limit = searchParams.get('limit') || '1000'
+
+    const response = await fetch(
+      `https://api.vapi.ai/chat?assistantId=${assistantId}&limit=${encodeURIComponent(limit)}`,
+      {
       method: "GET",
       headers: {
         "Authorization": `Bearer ${apiKey}`

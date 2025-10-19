@@ -70,7 +70,7 @@ export default function ChatPage() {
   function endOfDay(d: Date) { const x = new Date(d); x.setHours(23,59,59,999); return x }
   function formatDate(d: Date) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }
   
-  function applyPreset(preset: 'today' | 'last7' | 'thisMonth' | 'lastMonth' | 'all') {
+  async function applyPreset(preset: 'today' | 'last7' | 'thisMonth' | 'lastMonth' | 'all') {
     const now = new Date()
     if (preset === 'today') {
       const from = startOfDay(now)
@@ -97,15 +97,27 @@ export default function ChatPage() {
       setRangeLabel('All time')
     }
     setIsCalendarOpen(false)
+    // trigger a server fetch so server-side filtering (if available) is used
+    try {
+      await fetchChats()
+    } catch (e) {
+      // ignore - fetchChats already sets error state
+    }
   }
 
-  function applyRange() {
+  async function applyRange() {
     if (selectedRange?.from && selectedRange?.to) {
       setRangeLabel(`${formatDate(selectedRange.from)} - ${formatDate(selectedRange.to)}`)
     } else {
       setRangeLabel('All time')
     }
     setIsCalendarOpen(false)
+    // fetch chats with the newly applied range
+    try {
+      await fetchChats()
+    } catch (e) {
+      // fetchChats handles errors
+    }
   }
 
   const setupAutoRefresh = () => {
@@ -175,7 +187,19 @@ export default function ChatPage() {
         return
       }
 
-      const response = await fetch(`/api/vapi/chats?assistantId=${webAssistantId}`)
+      // build query with optional date range parameters
+      let url = `/api/vapi/chats?assistantId=${webAssistantId}`
+      if (selectedRange?.from && selectedRange?.to) {
+        try {
+          const fromIso = selectedRange.from.toISOString()
+          const toIso = selectedRange.to.toISOString()
+          url += `&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`
+        } catch (e) {
+          // if dates aren't valid, ignore and fetch without range
+        }
+      }
+
+      const response = await fetch(url)
       const result = await response.json()
 
       if (result.success && result.data) {

@@ -23,6 +23,7 @@ const AgentPerformanceChart = dynamic(
   }
 )
 import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts"
+import { ChatsPerformanceChart } from "@/components/chats-performance-chart"
 import type { User } from '@supabase/supabase-js'
 // Fallback for environments where RealtimeChannel type isn't exported
 type RealtimeChannel = any
@@ -119,6 +120,7 @@ export default function Dashboard() {
   })
   const [talkingPoints, setTalkingPoints] = useState<{ label: string; percent: number; color: string; hexColor?: string }[]>([])
   const [loading, setLoading] = useState(true)
+  const [chatsFromVapi, setChatsFromVapi] = useState<any[]>([])
   const router = useRouter()
   const supabase = createClient()
   const pollRef = useRef<NodeJS.Timeout | null>(null)
@@ -369,7 +371,7 @@ export default function Dashboard() {
       }
 
       // Resolve owners set: self + any owners where I'm a member (active)
-      const owners: string[] = [userId]
+  const owners: string[] = [String(userId)]
       const { data: memberships } = await supabase
         .from("account_users")
         .select("owner_user_id, is_active")
@@ -380,10 +382,38 @@ export default function Dashboard() {
         if (oid && !owners.includes(oid)) owners.push(oid)
       })
 
-      // Use Promise.allSettled for parallel requests
+      // Use Promise.allSettled for parallel requests.
+      // Wrap the Vapi fetches with defensive handlers so JSON parse/network errors
+      // don't cause unhandled rejections in the top-level Promise chain.
+      const safeFetch = async (url: string) => {
+        try {
+          const res = await fetch(url)
+          const text = await res.text()
+          try {
+            return JSON.parse(text)
+          } catch (parseErr) {
+            return { success: false, error: `Invalid JSON from ${url}: ${parseErr}` }
+          }
+        } catch (err: any) {
+          return { success: false, error: String(err) }
+        }
+      }
+
+      // First, resolve the configured web assistant id so we can request chats
+      const webAssistantResp = await safeFetch('/api/env/web-assistant')
+      let assistantId: string | null = null
+      if (webAssistantResp && (webAssistantResp as any).configured && (webAssistantResp as any).assistantId) {
+        assistantId = String((webAssistantResp as any).assistantId)
+      } else {
+        console.warn('No web assistant configured; chats will not be fetched')
+      }
+
       const results = await Promise.allSettled([
-        // NEW: Fetch calls from Vapi API
-        fetch('/api/vapi/calls').then(res => res.json()),
+        // NEW: Fetch calls from Vapi API (defensive)
+        (async () => await safeFetch('/api/vapi/calls'))(),
+
+        // NEW: Fetch chats from Vapi API (defensive) - include assistantId when available
+        (async () => assistantId ? await safeFetch(`/api/vapi/chats?assistantId=${encodeURIComponent(assistantId)}`) : { success: false, error: 'No assistant configured' })(),
         
         // KEEP: Fetch campaigns from Supabase
         supabase
@@ -402,44 +432,70 @@ export default function Dashboard() {
           .limit(100)
       ])
 
-      // Handle Vapi calls data
-      if (results[0].status === 'fulfilled' && results[0].value.success) {
-        const vapiCalls = results[0].value.data || []
-        console.log('Vapi calls received:', vapiCalls.length)
-        
-        // Transform and set calls data
-        setCalls(transformVapiCalls(vapiCalls))
-        
-        // Calculate stats and metrics from Vapi data
-        calculateCallStatsFromVapi(vapiCalls)
-        calculateCallMetricsFromVapi(vapiCalls)
-      } else if (results[0].status === 'fulfilled') {
-        console.error('Vapi API error:', results[0].value.error)
-        // Set empty data on API error
-        setCalls([])
-        setCallStats({
-          inbound: { completed: 0, missed: 0, inProgress: 0 },
-          outbound: { completed: 0, missed: 0, inProgress: 0 }
-        })
-        setCallMetrics({
-          totalMinutes: 5000,
-          remainingMinutes: 5000,
-          percentRemaining: 100,
-          avgDuration: 0,
-          avgChangePercent: 0
-        })
+      // Handle Vapi calls data (guard against unexpected shapes)
+      if (!results || !Array.isArray(results) || results.length < 1) {
+        console.error('Unexpected results from Promise.allSettled for calls/chats:', results)
+      } else {
+        const callResult = results[0]
+        if (callResult && callResult.status === 'fulfilled' && (callResult as any).value && (callResult as any).value.success) {
+          const vapiCalls = (callResult as any).value.data || []
+          console.log('Vapi calls received:', vapiCalls.length)
+          setCalls(transformVapiCalls(vapiCalls))
+          calculateCallStatsFromVapi(vapiCalls)
+          calculateCallMetricsFromVapi(vapiCalls)
+        } else if (callResult && callResult.status === 'fulfilled') {
+          console.error('Vapi API error (calls):', (callResult as any).value)
+          setCalls([])
+          setCallStats({
+            inbound: { completed: 0, missed: 0, inProgress: 0 },
+            outbound: { completed: 0, missed: 0, inProgress: 0 }
+          })
+          setCallMetrics({
+            totalMinutes: 5000,
+            remainingMinutes: 5000,
+            percentRemaining: 100,
+            avgDuration: 0,
+            avgChangePercent: 0
+          })
+        } else if (callResult && callResult.status === 'rejected') {
+          console.error('Vapi calls request rejected:', callResult.reason)
+        }
       }
 
       // Handle campaigns (keep existing Supabase logic)
-      if (results[1].status === 'fulfilled' && !results[1].value.error) {
-        setCampaigns((results[1].value.data as Campaign[]) || [])
+      if (results[2] && results[2].status === 'fulfilled' && !(results[2] as any).value?.error) {
+        setCampaigns(((results[2] as any).value?.data as Campaign[]) || [])
+      } else if (results[2] && results[2].status === 'rejected') {
+        console.error('Campaigns request failed:', results[2].reason)
       }
 
       // Handle talking points from Supabase (as requested)
-      if (results[2].status === 'fulfilled' && !results[2].value.error) {
-        calculateTalkingPointsFromEvents((results[2].value.data as any[]) || [])
+      if (results[3] && results[3].status === 'fulfilled' && !(results[3] as any).value?.error) {
+        calculateTalkingPointsFromEvents(((results[3] as any).value?.data as any[]) || [])
+      } else if (results[3] && results[3].status === 'rejected') {
+        console.error('Talking points request failed:', results[3].reason)
+        setTalkingPoints([])
       } else {
         setTalkingPoints([])
+      }
+
+      // Handle Vapi chats data (guarded)
+      if (results[1]) {
+        const chatResult = results[1]
+        if (chatResult.status === 'fulfilled' && (chatResult as any).value && (chatResult as any).value.success) {
+          const vapiChats = (chatResult as any).value.data || []
+          console.log('Vapi chats received:', vapiChats.length)
+          setChatsFromVapi(vapiChats)
+        } else if (chatResult.status === 'fulfilled') {
+          console.error('Vapi chats API error:', (chatResult as any).value)
+          setChatsFromVapi([])
+        } else if (chatResult.status === 'rejected') {
+          console.error('Vapi chats request rejected:', chatResult.reason)
+          setChatsFromVapi([])
+        }
+      } else {
+        console.warn('No chat result present in results array:', results)
+        setChatsFromVapi([])
       }
 
       // Log any failed requests
@@ -623,23 +679,16 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <Card className="bg-white border-gray-200 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Remaining Minutes</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-600">Total Interactions</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-2xl font-bold text-black">{callMetrics.remainingMinutes.toLocaleString()}</span>
-              <Button size="sm" className="bg-teal-500 hover:bg-teal-600 text-white">
-                <Plus className="h-4 w-4 mr-1" />
-                Add
-              </Button>
+              <span className="text-2xl font-bold text-black">{(chatsFromVapi || []).length}</span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-teal-500 h-2 rounded-full"
-                style={{ width: `${callMetrics.percentRemaining}%` }}
-              ></div>
+            <div>
+              <ChatsPerformanceChart period="monthly" chats={chatsFromVapi || []} />
             </div>
-            <p className="text-xs text-gray-500 mt-1">{callMetrics.percentRemaining}% remaining</p>
+            <p className="text-xs text-gray-500 mt-1">All time</p>
           </CardContent>
         </Card>
 
